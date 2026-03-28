@@ -1,0 +1,22 @@
+{
+  "name": "vertex-ai-agent-suite",
+  "version": "1.0.0",
+  "description": "Desktop Suite for Vertex AI Agent Development",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "VertexAI",
+    "Agent",
+    "Streamlit",
+    "Electron"
+  ],
+  "author": "Vertex AI Agent Suite Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  }
+}

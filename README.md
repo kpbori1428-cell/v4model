@@ -555,3 +555,43 @@ agent = MyAgent()
 error_result = agent.get_session(session_id="nonexistent_session_123")
 print(json.dumps(error_result, indent=2))
 El código anterior genera el siguiente resultado: json { "error": { "code": 404, "message": "Invocation error in 'get_session': Session not found: nonexistent_session_123" } }
+
+---
+
+## 🤖 Vertex AI Agent Suite (Desktop & Web)
+
+Esta suite proporciona una interfaz visual profesional para el desarrollo acelerado de agentes de Vertex AI.
+
+### 🌟 Características
+- **Constructor de Agentes**: Configuración visual de modelos Gemini, capacidades (sync/async/streaming) e integraciones (Cloud Trace, Secret Manager).
+- **Diseñador de Herramientas**: Interfaz para crear, probar y gestionar una biblioteca de "habilidades" (funciones Python) que se inyectan automáticamente en el código del agente.
+- **Generación de Código**: Descarga instantánea de plantillas de agentes listas para producción siguiendo las mejores prácticas de Google Cloud.
+
+### 🛠️ Requisitos
+- **Python 3.10+**: `pip install streamlit pandas langchain-google-vertexai langgraph opentelemetry-api opentelemetry-sdk`
+- **Node.js 18+** (Solo para la versión de escritorio): `npm install`
+
+### 🚀 Cómo empezar
+
+#### Versión Web (Streamlit)
+Ideal para desarrollo rápido en el navegador:
+```bash
+streamlit run app.py
+```
+
+#### Versión de Escritorio (Electron)
+Para una experiencia de aplicación nativa:
+1. Instala las dependencias de Node:
+   ```bash
+   npm install
+   ```
+2. Inicia la aplicación:
+   ```bash
+   npm start
+   ```
+
+### 📦 Estructura del Proyecto
+- `app.py`: Lógica unificada de la interfaz visual y generador de código.
+- `main.js`: Punto de entrada de Electron (Main Process).
+- `launcher.py`: Script de arranque optimizado para el entorno de escritorio.
+- `package.json`: Configuración de dependencias de Electron y scripts de empaquetado.
