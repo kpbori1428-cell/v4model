@@ -6,9 +6,9 @@ Este documento detalla los pasos necesarios para transformar los generadores ind
 *Objetivo: Consolidar la experiencia de usuario en un solo Dashboard.*
 
 - [x] **Fusión de Interfaces**: Aplicación raíz en `app.py` que utiliza `st.tabs` para separar el "Constructor de Agentes" del "Diseñador de Herramientas".
-- [ ] **Persistencia Local**: Implementar un sistema de guardado (JSON o base de datos ligera) para que las herramientas creadas se guarden en una biblioteca persistente (actualmente es por sesión).
+- [x] **Persistencia Local**: Sistema de guardado en `tools.json` para que las herramientas creadas se mantengan entre reinicios de la aplicación.
 - [x] **Inyección Dinámica**: El constructor de agentes lee la biblioteca local y ofrece un multiselect para inyectar automáticamente el código fuente de las herramientas.
-- [ ] **Gestión de Versiones**: Capacidad de guardar diferentes versiones de un mismo agente.
+- [x] **Gestión de Versiones**: Capacidad de guardar y cargar diferentes configuraciones del agente (modelos, capacidades, herramientas seleccionadas) mediante `agents.json`.
 
 ## 🟡 Fase 2: Entorno de Pruebas (Playground) Integrado
 *Objetivo: Validar el comportamiento del agente sin salir de la herramienta.*

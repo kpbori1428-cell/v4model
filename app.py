@@ -1,6 +1,40 @@
 import streamlit as st
 import pandas as pd
+import json
+import os
 from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict
+
+# --- CONFIGURACIÓN DE PERSISTENCIA ---
+TOOLS_FILE = "tools.json"
+AGENTS_FILE = "agents.json"
+
+def load_tools():
+    if os.path.exists(TOOLS_FILE):
+        try:
+            with open(TOOLS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_tools(library):
+    with open(TOOLS_FILE, "w") as f:
+        json.dump(library, f, indent=4)
+
+def load_agents():
+    if os.path.exists(AGENTS_FILE):
+        try:
+            with open(AGENTS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_agent(name, config):
+    agents = load_agents()
+    agents[name] = config
+    with open(AGENTS_FILE, "w") as f:
+        json.dump(agents, f, indent=4)
 
 # --- LÓGICA DE GENERACIÓN ---
 
@@ -260,7 +294,9 @@ def main():
     st.title("🤖 Vertex AI Agent Suite")
 
     if 'tools_library' not in st.session_state:
-        st.session_state.tools_library = {}
+        st.session_state.tools_library = load_tools()
+
+    agents_library = load_agents()
 
     tab_agent, tab_tools = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas"])
 
@@ -268,16 +304,38 @@ def main():
         col_side, col_main = st.columns([1, 2])
 
         with col_side:
+            st.header("Versiones")
+            if agents_library:
+                selected_version = st.selectbox("Cargar Versión", [""] + list(agents_library.keys()))
+                if selected_version:
+                    v_config = agents_library[selected_version]
+                    # Note: streamlit values are updated next run if we don't use keys,
+                    # but for this simple tool we'll rely on session_state or default values.
+                    st.info(f"Cargada versión: {selected_version}")
+            else:
+                st.caption("No hay versiones guardadas.")
+
+            new_v_name = st.text_input("Nombre de Nueva Versión", "")
+
+            st.divider()
             st.header("Configuración")
-            class_name = st.text_input("Nombre de la Clase", value="MyAgent")
-            project_id = st.text_input("Project ID", placeholder="your-project-id")
-            location = st.text_input("Location", value="us-central1")
-            model_name = st.text_input("Model Name", value="gemini-1.5-flash-002")
+
+            # Default values logic based on selection
+            def get_v(key, default):
+                if agents_library and selected_version and key in agents_library[selected_version]:
+                    return agents_library[selected_version][key]
+                return default
+
+            class_name = st.text_input("Nombre de la Clase", value=get_v('class_name', "MyAgent"))
+            project_id = st.text_input("Project ID", value=get_v('project_id', ""), placeholder="your-project-id")
+            location = st.text_input("Location", value=get_v('location', "us-central1"))
+            model_name = st.text_input("Model Name", value=get_v('model_name', "gemini-1.5-flash-002"))
 
             st.subheader("Habilidades Seleccionadas")
             selected_tools = st.multiselect(
                 "Elige herramientas de tu biblioteca",
                 options=list(st.session_state.tools_library.keys()),
+                default=get_v('tools', []),
                 help="Las herramientas se definen en la pestaña 'Diseñador de Herramientas'."
             )
 
@@ -285,21 +343,23 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Capacidades")
-                enable_async = st.checkbox("Consultas Asíncronas", value=False)
-                enable_streaming = st.checkbox("Soportar Streaming", value=False)
-                enable_async_streaming = st.checkbox("Streaming Asíncrono", value=False)
-                enable_register_ops = st.checkbox("Registrar Operaciones", value=False)
-                enable_type_annotations = st.checkbox("TypedDict Annotations", value=False)
-                enable_state_mgmt = st.checkbox("Gestión de Estado", value=False)
+                enable_async = st.checkbox("Consultas Asíncronas", value=get_v('enable_async', False))
+                enable_streaming = st.checkbox("Soportar Streaming", value=get_v('enable_streaming', False))
+                enable_async_streaming = st.checkbox("Streaming Asíncrono", value=get_v('enable_async_streaming', False))
+                enable_register_ops = st.checkbox("Registrar Operaciones", value=get_v('enable_register_ops', False))
+                enable_type_annotations = st.checkbox("TypedDict Annotations", value=get_v('enable_type_annotations', False))
+                enable_state_mgmt = st.checkbox("Gestión de Estado", value=get_v('enable_state_mgmt', False))
 
             with col2:
                 st.subheader("Integraciones")
-                enable_tracing = st.checkbox("Habilitar Cloud Trace", value=False)
-                tracing_provider = st.selectbox("Proveedor", ["OpenInference", "OpenLLMetry"], disabled=not enable_tracing)
-                enable_secrets = st.checkbox("Secret Manager", value=False)
-                enable_error_handling = st.checkbox("Error Wrapper", value=True)
-                env_vars = st.text_area("Vars de Entorno (K=V)", "")
-                credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"])
+                enable_tracing = st.checkbox("Habilitar Cloud Trace", value=get_v('enable_tracing', False))
+                provider_idx = ["OpenInference", "OpenLLMetry"].index(get_v('tracing_provider', "OpenInference"))
+                tracing_provider = st.selectbox("Proveedor", ["OpenInference", "OpenLLMetry"], index=provider_idx, disabled=not enable_tracing)
+                enable_secrets = st.checkbox("Secret Manager", value=get_v('enable_secrets', False))
+                enable_error_handling = st.checkbox("Error Wrapper", value=get_v('enable_error_handling', True))
+                env_vars = st.text_area("Vars de Entorno (K=V)", value=get_v('env_vars', ""))
+                cred_idx = ["None", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
+                credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"], index=cred_idx)
 
             st.divider()
             config = {
@@ -314,6 +374,14 @@ def main():
             }
 
             generated_code = generate_agent_code(config, st.session_state.tools_library)
+
+            c_code, c_save = st.columns([3, 1])
+            with c_save:
+                if st.button("💾 Guardar Versión", disabled=not new_v_name):
+                    save_agent(new_v_name, config)
+                    st.success(f"Versión '{new_v_name}' guardada.")
+                    st.rerun()
+
             st.code(generated_code, language="python")
             st.download_button("Descargar Agente (.py)", generated_code, f"{class_name.lower()}.py")
 
@@ -334,6 +402,7 @@ def main():
             if st.button("✅ Guardar en Biblioteca"):
                 tool_code = generate_tool_code(t_name, t_desc, params_data.to_dict('records'), t_body)
                 st.session_state.tools_library[t_name] = tool_code
+                save_tools(st.session_state.tools_library)
                 st.success(f"Herramienta '{t_name}' guardada correctamente.")
 
         with col_t2:
@@ -345,6 +414,7 @@ def main():
                     st.code(code, language="python")
                     if st.button(f"Eliminar {name}"):
                         del st.session_state.tools_library[name]
+                        save_tools(st.session_state.tools_library)
                         st.rerun()
 
 if __name__ == "__main__":
