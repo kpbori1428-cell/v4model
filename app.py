@@ -129,27 +129,48 @@ def instantiate_agent_mock(config, tools_library):
             self.tool_defs = tool_defs
 
         def query(self, input_text):
-            # Lógica de simulación avanzada (Fase 3)
-            if not self.config['project_id']:
-                return {"output": "⚠️ Error: Falta el Project ID en la configuración.", "debug": "Config validation failed"}
+            # Lógica de simulación avanzada (Misión Multi-Agente)
+            nodes = self.config.get('nodes', [])
+            edges = self.config.get('edges', [])
 
-            tool_names = ", ".join(self.config['tools']) or "ninguna"
-            sys_p = self.config['system_prompt']
+            if not nodes:
+                return {"output": "⚠️ Error: No hay nodos definidos.", "debug": "Architecture empty"}
 
-            # Simulamos que el agente "conoce" sus instrucciones
-            resp = f"**[MOCK]** Respondiendo como: {self.config['class_name']}\n\n"
-            resp += f"Instrucciones: _{sys_p}_\n\n"
-            resp += f"Respuesta a '{input_text}': Entendido. Utilizaré mi configuración (Temp: {self.config['temperature']}) para asistirte."
+            # Simular traza de ejecución de la Misión
+            trace = []
+            current_node = nodes[0]['Nodo']
+            steps_limit = 15
+
+            trace.append(f"🏁 Iniciando flujo en nodo: {current_node}")
+
+            # Simulación de handoffs
+            for _ in range(steps_limit):
+                node_info = next((n for n in nodes if n['Nodo'] == current_node), None)
+                if not node_info: break
+
+                trace.append(f"➡️ [EJECUTANDO: {current_node}] -> Prompt: {node_info['Prompt'][:50]}...")
+
+                # Buscar siguiente nodo
+                next_edge = next((e for e in edges if e['Origen'] == current_node), None)
+                if not next_edge:
+                    trace.append(f"🔚 Fin de flujo (No hay más aristas desde {current_node})")
+                    break
+
+                current_node = next_edge['Destino']
+                if current_node.upper() == "END":
+                    trace.append("🔚 Fin de flujo alcanzado (END)")
+                    break
+                trace.append(f"📤 Handoff -> Siguiente nodo: {current_node}")
+
+            resp = f"**[MOCK MULTI-AGENTE]**\n\nEjecución completada siguiendo el grafo de {len(nodes)} nodos.\n\n"
+            resp += f"**Entrada:** {input_text}\n"
+            resp += f"**Resultado Final:** El sistema ha procesado la consulta a través de {current_node}."
 
             debug_info = {
                 "model": self.config['model_name'],
-                "params": {
-                    "temperature": self.config['temperature'],
-                    "top_p": self.config['top_p'],
-                    "max_tokens": self.config['max_tokens']
-                },
-                "tools_active": tool_names,
-                "state_schema": self.config['state_schema']
+                "nodes": [n['Nodo'] for n in nodes],
+                "execution_trace": trace,
+                "edges_active": len(edges)
             }
 
             return {
@@ -286,6 +307,7 @@ class {class_name}:
         self.project = project
         self.location = location
         self.nodes_config = {config['nodes']}
+        self.edges_config = {config['edges']}
 
     def set_up(self):""")
 
@@ -369,29 +391,43 @@ class {class_name}:
 
             workflow.add_node(node_name, make_node_func(node_prompt))
 
-        # Configuración de Flujo (Lineal por defecto en el generador)
-        node_names = [n['Nodo'] for n in self.nodes_config]
-        for i in range(len(node_names) - 1):
-            workflow.add_edge(node_names[i], node_names[i+1])
+        # Configuración de Flujo Dinámico (Basado en Edges)
+        for edge in self.edges_config:
+            source = edge['Origen']
+            target = edge['Destino']
+            condition = edge.get('Condición', 'Éxito')
 
-        # Lógica de herramientas vinculada al último nodo o flujo circular
+            # Map END string to actual END constant
+            target_node = END if target.upper() == "END" else target
+
+            if condition == 'Éxito':
+                workflow.add_edge(source, target_node)
+            else:
+                # Lógica condicional (ej. Error -> Reintento, Veto -> Re-plan)
+                def make_condition(t, c):
+                    def _check(state):
+                        # Lógica simplificada: en un sistema real esto evaluaría el contenido del mensaje
+                        # o una variable específica en el estado (como 'status' o 'errors')
+                        last_msg = state['messages'][-1].content.lower()
+                        if c.lower() in last_msg:
+                            return t
+                        return END # Fallback
+                    return _check
+
+                workflow.add_conditional_edges(source, make_condition(target_node, condition))
+
+        # Inyección de Herramientas (Si existen)
         if self.tools:
             from langgraph.prebuilt import ToolNode
             workflow.add_node("tools", ToolNode(self.tools))
-
-            def should_continue(state):
-                last_message = state['messages'][-1]
-                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            # Las herramientas suelen conectarse tras el nodo de ejecución o según el LLM decida
+            # Aquí permitimos que cualquier nodo llame a herramientas si el LLM lo indica
+            def tool_router(state):
+                if hasattr(state['messages'][-1], "tool_calls") and state['messages'][-1].tool_calls:
                     return "tools"
-                return END
+                return "continue"
 
-            # El último nodo decide si ir a herramientas o terminar
-            workflow.add_conditional_edges(node_names[-1], should_continue)
-            workflow.add_edge("tools", node_names[0]) # Vuelve al inicio tras usar herramienta
-        else:
-            workflow.add_edge(node_names[-1], END)
-
-        workflow.set_entry_point(node_names[0])
+        workflow.set_entry_point(self.nodes_config[0]['Nodo'])
 
         # Implementación de HITL y Persistencia
         interrupt_tools = {hitl_tools}
@@ -516,6 +552,47 @@ def main():
 
     agents_library = load_agents()
 
+    # --- INYECTAR PRESET DE MISIÓN (SI NO EXISTE) ---
+    MISSION_PRESET_NAME = "Misión: Multi-Agente Robusto"
+    if MISSION_PRESET_NAME not in agents_library:
+        agents_library[MISSION_PRESET_NAME] = {
+            "class_name": "RobustMultiAgent",
+            "project_id": "",
+            "location": "us-central1",
+            "model_name": "gemini-2.5-flash",
+            "tools": [],
+            "nodes": [
+                {"Nodo": "Discovery", "Prompt": "Construye el mapa de verdad. Extrae definiciones y tipos vía LSP/Vectores. Responde con un Context Bundle (JSON)."},
+                {"Nodo": "Planning", "Prompt": "Genera un Implementation Plan (JSON) atómico. No generes código, solo lógica secuencial."},
+                {"Nodo": "Execution", "Prompt": "Manipula archivos. Genera Hunks (diffs) con contexto de 3 líneas. Usa Read/Write tools."},
+                {"Nodo": "Diagnostics", "Prompt": "Linter/Compilador virtual. Busca errores de tipo o sintaxis. Devuelve 'Zero Errors' o falla."},
+                {"Nodo": "Testing", "Prompt": "Ejecuta tests en Sandbox. Si falla un test lógico, devuelve el stack trace a Planning para re-ajuste."},
+                {"Nodo": "Critique", "Prompt": "Auditoría final de calidad, seguridad y estándares. Emite Verdict (Aprobado o Veto)."}
+            ],
+            "edges": [
+                {"Origen": "Discovery", "Destino": "Planning", "Condición": "Éxito"},
+                {"Origen": "Planning", "Destino": "Execution", "Condición": "Éxito"},
+                {"Origen": "Execution", "Destino": "Diagnostics", "Condición": "Éxito"},
+                {"Origen": "Diagnostics", "Destino": "Execution", "Condición": "Error"},
+                {"Origen": "Diagnostics", "Destino": "Testing", "Condición": "Zero Errors"},
+                {"Origen": "Testing", "Destino": "Planning", "Condición": "Fallo"},
+                {"Origen": "Testing", "Destino": "Critique", "Condición": "Éxito"},
+                {"Origen": "Critique", "Destino": "Planning", "Condición": "Veto"},
+                {"Origen": "Critique", "Destino": "END", "Condición": "Aprobado"}
+            ],
+            "temperature": 0.1, "top_p": 0.95, "top_k": 40, "max_tokens": 4096,
+            "state_schema": [
+                {"Variable": "context_bundle", "Tipo": "dict", "Default": "{}"},
+                {"Variable": "plan", "Tipo": "dict", "Default": "{}"},
+                {"Variable": "hunks", "Tipo": "list", "Default": "[]"},
+                {"Variable": "diagnostics", "Tipo": "str", "Default": "''"}
+            ],
+            "enable_async": True, "enable_streaming": False, "enable_async_streaming": False,
+            "enable_tracing": True, "tracing_provider": "OpenInference", "enable_secrets": True,
+            "enable_error_handling": True, "credential_type": "OAuth", "enable_register_ops": True,
+            "enable_type_annotations": True, "enable_state_mgmt": True, "env_vars": ""
+        }
+
     tab_agent, tab_tools, tab_play = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas", "🎮 Playground"])
 
     with tab_agent:
@@ -558,17 +635,25 @@ def main():
             )
 
         with col_main:
-            t_prompt, t_params, t_state, t_integrations = st.tabs(["✍️ Prompt Studio", "🎚️ Parámetros", "🧠 Estado", "🔌 Integraciones"])
+            t_arch, t_params, t_state, t_integrations = st.tabs(["🏗️ Arquitectura", "🎚️ Parámetros", "🧠 Estado", "🔌 Integraciones"])
 
-            with t_prompt:
-                st.subheader("Arquitectura de Nodos (Multi-Agente)")
-                st.write("Define los roles que compondrán a tu agente. Cada nodo puede tener su propia personalidad.")
+            with t_arch:
+                st.subheader("Nodos (Agentes)")
+                st.write("Define los roles que compondrán a tu sistema. Cada nodo es un agente independiente.")
 
                 default_nodes = get_v('nodes', [{"Nodo": "manager", "Prompt": "Eres el coordinador central. Analiza la petición y delega."}])
                 df_nodes = pd.DataFrame(default_nodes)
                 nodes_config = st.data_editor(df_nodes, num_rows="dynamic", use_container_width=True)
 
-                st.caption("Tip: El primer nodo será el punto de entrada.")
+                st.divider()
+                st.subheader("Conexiones (Edges)")
+                st.write("Define el flujo de control entre los agentes.")
+
+                default_edges = get_v('edges', [{"Origen": "manager", "Destino": "END", "Condición": "Éxito"}])
+                df_edges = pd.DataFrame(default_edges)
+                edges_config = st.data_editor(df_edges, num_rows="dynamic", use_container_width=True)
+
+                st.caption("Tip: Usa 'END' para finalizar el flujo. El primer nodo de la lista es la entrada.")
 
             with t_params:
                 st.subheader("Configuración del Modelo")
@@ -613,7 +698,9 @@ def main():
             config = {
                 'class_name': class_name, 'project_id': project_id, 'location': location,
                 'model_name': model_name, 'tools': selected_tools,
-                'nodes': nodes_config.to_dict('records'), 'temperature': temperature,
+                'nodes': nodes_config.to_dict('records'),
+                'edges': edges_config.to_dict('records'),
+                'temperature': temperature,
                 'top_p': top_p, 'top_k': top_k, 'max_tokens': max_tokens,
                 'state_schema': state_schema.to_dict('records'),
                 'enable_async': enable_async, 'enable_streaming': enable_streaming,
@@ -695,12 +782,13 @@ def main():
                                 client_config,
                                 scopes=['https://www.googleapis.com/auth/cloud-platform']
                             )
-                            st.info("Iniciando flujo... Revisa tu navegador.")
+                            st.warning("⚠️ Nota: El 'Modo Automático' abrirá una ventana en tu navegador y pausará esta interfaz hasta que completes el login. Si la app parece congelada, revisa tus pestañas abiertas.")
+                            st.info("Iniciando flujo de autenticación...")
                             st.session_state.creds = flow.run_local_server(port=0, prompt='consent')
                         gcp_token = st.session_state.creds.token
-                        st.success("Autenticado")
+                        st.success("✅ Autenticado correctamente.")
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"Error en OAuth Automático: {e}")
 
             elif mode == "OAuth Manual (Código)":
                 secrets_file = st.file_uploader("Sube tu client_secrets.json", type=["json"], key="manual_oauth")
@@ -764,8 +852,9 @@ def main():
                 st.markdown(prompt)
 
             # Generate response via Live/Mock Agent
-            agent = instantiate_agent_live(config, st.session_state.tools_library, access_token=gcp_token)
-            response = agent.query(prompt)
+            with st.spinner("🤖 El agente está pensando..."):
+                agent = instantiate_agent_live(config, st.session_state.tools_library, access_token=gcp_token)
+                response = agent.query(prompt)
 
             with st.chat_message("assistant"):
                 st.markdown(response["output"])
