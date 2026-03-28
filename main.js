@@ -16,9 +16,9 @@ function createWindow() {
     },
   });
 
-  // Start Streamlit server
-  // We use the Python executable in the environment
-  streamlitProcess = spawn('streamlit', ['run', 'app.py', '--server.port', '8501', '--server.headless', 'true', '--global.developmentMode', 'false']);
+  // Start Streamlit server via specialized launcher
+  // This ensures the correct environment and flags are used for the desktop version
+  streamlitProcess = spawn('python3', ['launcher.py']);
 
   streamlitProcess.stdout.on('data', (data) => {
     console.log(`Streamlit: ${data}`);

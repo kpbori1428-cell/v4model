@@ -53,14 +53,32 @@ def instantiate_agent_mock(config, tools_library):
             self.tool_defs = tool_defs
 
         def query(self, input_text):
-            # Lógica simple de simulación
+            # Lógica de simulación avanzada (Fase 3)
             if not self.config['project_id']:
                 return {"output": "⚠️ Error: Falta el Project ID en la configuración.", "debug": "Config validation failed"}
 
             tool_names = ", ".join(self.config['tools']) or "ninguna"
+            sys_p = self.config['system_prompt']
+
+            # Simulamos que el agente "conoce" sus instrucciones
+            resp = f"**[MOCK]** Respondiendo como: {self.config['class_name']}\n\n"
+            resp += f"Instrucciones: _{sys_p}_\n\n"
+            resp += f"Respuesta a '{input_text}': Entendido. Utilizaré mi configuración (Temp: {self.config['temperature']}) para asistirte."
+
+            debug_info = {
+                "model": self.config['model_name'],
+                "params": {
+                    "temperature": self.config['temperature'],
+                    "top_p": self.config['top_p'],
+                    "max_tokens": self.config['max_tokens']
+                },
+                "tools_active": tool_names,
+                "state_schema": self.config['state_schema']
+            }
+
             return {
-                "output": f"Simulación: Soy '{self.config['class_name']}' usando el modelo '{self.config['model_name']}'. Tengo acceso a las herramientas: {tool_names}. Me has preguntado: '{input_text}'",
-                "debug": f"Tools available: {len(self.tool_defs)} | Model: {self.config['model_name']}"
+                "output": resp,
+                "debug": json.dumps(debug_info, indent=2)
             }
 
     return MockAgent(config, tool_defs)
@@ -81,10 +99,10 @@ def generate_agent_code(config, tools_library):
     class_name = config['class_name']
     project = config['project_id']
     location = config['location']
-    model = config['model_name']
+    model_name = config['model_name']
     selected_tool_names = config['tools']
 
-    code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict"]
+    code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict, Annotated, List, Union"]
 
     # Inyectar definiciones de herramientas seleccionadas
     if selected_tool_names:
@@ -110,6 +128,24 @@ class RunnableConfig(TypedDict, total=False):
     metadata: Dict[str, Any]
     configurable: Dict[str, Any]
 """)
+
+    # Generación dinámica del Estado
+    state_schema = config.get('state_schema', [])
+    state_lines = ["class AgentState(TypedDict):"]
+    if not any(v['Variable'] == 'messages' for v in state_schema):
+        state_lines.append("    messages: Annotated[List[Any], lambda x, y: x + y]")
+
+    for var in state_schema:
+        v_name = var['Variable']
+        v_type = var['Tipo']
+        if v_type == 'list': py_type = "List[Any]"
+        elif v_type == 'dict': py_type = "Dict[str, Any]"
+        elif v_type == 'int': py_type = "int"
+        elif v_type == 'float': py_type = "float"
+        else: py_type = "str"
+        state_lines.append(f"    {v_name}: {py_type}")
+
+    code.append("\n".join(state_lines))
 
     if config['enable_error_handling']:
         code.append("from functools import wraps\nimport asyncio\nimport inspect")
@@ -157,7 +193,7 @@ def _format_error(func, err):
 class {class_name}:
     def __init__(
         self,
-        model: str = "{model}",
+        model: str = "{model_name}",
         tools: Sequence[Callable] = {tools_list},
         project: str = "{project}",
         location: str = "{location}",
@@ -166,6 +202,7 @@ class {class_name}:
         self.tools = tools
         self.project = project
         self.location = location
+        self.system_prompt = \"\"\"{config['system_prompt']}\"\"\"
 
     def set_up(self):""")
 
@@ -208,13 +245,56 @@ class {class_name}:
                 key, val = line.split('=', 1)
                 code.append(f'        os.environ["{key.strip()}"] = "{val.strip()}"')
 
-    code.append("""        import vertexai
+    code.append(f"""        import vertexai
         from langchain_google_vertexai import ChatVertexAI
-        from langgraph.prebuilt import create_react_agent
+        from langgraph.graph import StateGraph, END
+        from langchain_core.messages import SystemMessage
 
         vertexai.init(project=self.project, location=self.location)
-        model = ChatVertexAI(model_name=self.model_name)
-        self.graph = create_react_agent(model, tools=self.tools)
+
+        # Modelo con parámetros avanzados
+        self.llm = ChatVertexAI(
+            model_name=self.model_name,
+            temperature={config['temperature']},
+            top_p={config['top_p']},
+            top_k={config['top_k']},
+            max_output_tokens={config['max_tokens']}
+        )
+
+        if self.tools:
+            self.llm_with_tools = self.llm.bind_tools(self.tools)
+        else:
+            self.llm_with_tools = self.llm
+
+        # Definición manual del Grafo (StateGraph)
+        workflow = StateGraph(AgentState)
+
+        # Nodo de LLM
+        def call_model(state):
+            messages = [SystemMessage(content=self.system_prompt)] + state['messages']
+            response = self.llm_with_tools.invoke(messages)
+            return {{"messages": [response]}}
+
+        workflow.add_node("agent", call_model)
+
+        # Lógica de herramientas (Simplificada para el esqueleto manual)
+        if self.tools:
+            from langgraph.prebuilt import ToolNode
+            workflow.add_node("tools", ToolNode(self.tools))
+
+            def should_continue(state):
+                last_message = state['messages'][-1]
+                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                    return "tools"
+                return END
+
+            workflow.add_conditional_edges("agent", should_continue)
+            workflow.add_edge("tools", "agent")
+        else:
+            workflow.add_edge("agent", END)
+
+        workflow.set_entry_point("agent")
+        self.graph = workflow.compile()
 """)
 
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
@@ -372,31 +452,61 @@ def main():
             )
 
         with col_main:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Capacidades")
-                enable_async = st.checkbox("Consultas Asíncronas", value=get_v('enable_async', False))
-                enable_streaming = st.checkbox("Soportar Streaming", value=get_v('enable_streaming', False))
-                enable_async_streaming = st.checkbox("Streaming Asíncrono", value=get_v('enable_async_streaming', False))
-                enable_register_ops = st.checkbox("Registrar Operaciones", value=get_v('enable_register_ops', False))
-                enable_type_annotations = st.checkbox("TypedDict Annotations", value=get_v('enable_type_annotations', False))
-                enable_state_mgmt = st.checkbox("Gestión de Estado", value=get_v('enable_state_mgmt', False))
+            t_prompt, t_params, t_state, t_integrations = st.tabs(["✍️ Prompt Studio", "🎚️ Parámetros", "🧠 Estado", "🔌 Integraciones"])
 
-            with col2:
-                st.subheader("Integraciones")
-                enable_tracing = st.checkbox("Habilitar Cloud Trace", value=get_v('enable_tracing', False))
-                provider_idx = ["OpenInference", "OpenLLMetry"].index(get_v('tracing_provider', "OpenInference"))
-                tracing_provider = st.selectbox("Proveedor", ["OpenInference", "OpenLLMetry"], index=provider_idx, disabled=not enable_tracing)
-                enable_secrets = st.checkbox("Secret Manager", value=get_v('enable_secrets', False))
-                enable_error_handling = st.checkbox("Error Wrapper", value=get_v('enable_error_handling', True))
-                env_vars = st.text_area("Vars de Entorno (K=V)", value=get_v('env_vars', ""))
-                cred_idx = ["None", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
-                credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"], index=cred_idx)
+            with t_prompt:
+                st.subheader("Instrucciones del Sistema (System Prompt)")
+                system_prompt = st.text_area("Define el rol y comportamiento del agente",
+                                           value=get_v('system_prompt', "Eres un asistente servicial y experto."),
+                                           height=200)
+                st.caption("Tip: Puedes usar {variables} que luego inyectarás en el estado.")
+
+            with t_params:
+                st.subheader("Configuración del Modelo")
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    temperature = st.slider("Temperature", 0.0, 2.0, float(get_v('temperature', 0.5)), 0.1)
+                    top_p = st.slider("Top P", 0.0, 1.0, float(get_v('top_p', 0.9)), 0.05)
+                with col_p2:
+                    top_k = st.number_input("Top K", 1, 100, int(get_v('top_k', 40)))
+                    max_tokens = st.number_input("Max Output Tokens", 1, 8192, int(get_v('max_tokens', 2048)))
+
+            with t_state:
+                st.subheader("Esquema de Estado Personalizado")
+                st.write("Define variables adicionales que el agente mantendrá en memoria.")
+                default_state = get_v('state_schema', [{"Variable": "chat_history", "Tipo": "list", "Default": "[]"}])
+                df_state = pd.DataFrame(default_state)
+                state_schema = st.data_editor(df_state, num_rows="dynamic", use_container_width=True)
+
+            with t_integrations:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("Capacidades")
+                    enable_async = st.checkbox("Consultas Asíncronas", value=get_v('enable_async', False))
+                    enable_streaming = st.checkbox("Soportar Streaming", value=get_v('enable_streaming', False))
+                    enable_async_streaming = st.checkbox("Streaming Asíncrono", value=get_v('enable_async_streaming', False))
+                    enable_register_ops = st.checkbox("Registrar Operaciones", value=get_v('enable_register_ops', False))
+                    enable_type_annotations = st.checkbox("TypedDict Annotations", value=get_v('enable_type_annotations', False))
+                    enable_state_mgmt = st.checkbox("Gestión de Estado", value=get_v('enable_state_mgmt', True))
+
+                with col2:
+                    st.subheader("Integraciones de Cloud")
+                    enable_tracing = st.checkbox("Habilitar Cloud Trace", value=get_v('enable_tracing', False))
+                    provider_idx = ["OpenInference", "OpenLLMetry"].index(get_v('tracing_provider', "OpenInference"))
+                    tracing_provider = st.selectbox("Proveedor", ["OpenInference", "OpenLLMetry"], index=provider_idx, disabled=not enable_tracing)
+                    enable_secrets = st.checkbox("Secret Manager", value=get_v('enable_secrets', False))
+                    enable_error_handling = st.checkbox("Error Wrapper", value=get_v('enable_error_handling', True))
+                    env_vars = st.text_area("Vars de Entorno (K=V)", value=get_v('env_vars', ""))
+                    cred_idx = ["None", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
+                    credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"], index=cred_idx)
 
             st.divider()
             config = {
                 'class_name': class_name, 'project_id': project_id, 'location': location,
                 'model_name': model_name, 'tools': selected_tools,
+                'system_prompt': system_prompt, 'temperature': temperature,
+                'top_p': top_p, 'top_k': top_k, 'max_tokens': max_tokens,
+                'state_schema': state_schema.to_dict('records'),
                 'enable_async': enable_async, 'enable_streaming': enable_streaming,
                 'enable_async_streaming': enable_async_streaming, 'enable_tracing': enable_tracing,
                 'tracing_provider': tracing_provider, 'enable_secrets': enable_secrets,
