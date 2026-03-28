@@ -9,6 +9,16 @@ def generate_agent_code(config):
 
     code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict"]
 
+    code.append("""
+# EJEMPLO DE CREACIÓN DE HERRAMIENTA (Tool):
+# def get_weather(location: str):
+#     \"\"\"Obtiene el clima actual para una ubicación específica.
+#     Args:
+#         location: Ciudad y país, ej. San Francisco, CA
+#     \"\"\"
+#     return f"El clima en {location} es de 22 grados Celsius y soleado."
+""")
+
     if config['enable_type_annotations'] or config['enable_state_mgmt']:
         code.append("""
 # schemas.py
@@ -56,12 +66,14 @@ def _format_error(func, err):
     }
 """)
 
+    tools_list = f"[{tools}]" if tools.strip() else "[]"
+
     code.append(f"""
 class {class_name}:
     def __init__(
         self,
         model: str = "{model}",
-        tools: Sequence[Callable] = [{tools}],
+        tools: Sequence[Callable] = {tools_list},
         project: str = "{project}",
         location: str = "{location}",
     ):
