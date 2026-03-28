@@ -386,7 +386,7 @@ class {class_name}:
                     # En modo multi-nodo, el binding de herramientas suele ser para nodos específicos
                     # Aquí lo aplicamos a todos para simplificar el esqueleto avanzado
                     response = self.llm_with_tools.invoke(messages)
-                    return {"messages": [response]}
+                    return {{"messages": [response]}}
                 return _node
 
             workflow.add_node(node_name, make_node_func(node_prompt))
@@ -643,7 +643,7 @@ def main():
 
                 default_nodes = get_v('nodes', [{"Nodo": "manager", "Prompt": "Eres el coordinador central. Analiza la petición y delega."}])
                 df_nodes = pd.DataFrame(default_nodes)
-                nodes_config = st.data_editor(df_nodes, num_rows="dynamic", use_container_width=True)
+                nodes_config = st.data_editor(df_nodes, num_rows="dynamic", width="stretch")
 
                 st.divider()
                 st.subheader("Conexiones (Edges)")
@@ -651,7 +651,7 @@ def main():
 
                 default_edges = get_v('edges', [{"Origen": "manager", "Destino": "END", "Condición": "Éxito"}])
                 df_edges = pd.DataFrame(default_edges)
-                edges_config = st.data_editor(df_edges, num_rows="dynamic", use_container_width=True)
+                edges_config = st.data_editor(df_edges, num_rows="dynamic", width="stretch")
 
                 st.caption("Tip: Usa 'END' para finalizar el flujo. El primer nodo de la lista es la entrada.")
 
@@ -670,7 +670,7 @@ def main():
                 st.write("Define variables adicionales que el agente mantendrá en memoria.")
                 default_state = get_v('state_schema', [{"Variable": "chat_history", "Tipo": "list", "Default": "[]"}])
                 df_state = pd.DataFrame(default_state)
-                state_schema = st.data_editor(df_state, num_rows="dynamic", use_container_width=True)
+                state_schema = st.data_editor(df_state, num_rows="dynamic", width="stretch")
 
             with t_integrations:
                 col1, col2 = st.columns(2)
@@ -732,7 +732,7 @@ def main():
 
             st.subheader("Parámetros")
             df_params = pd.DataFrame([{"Nombre": "param1", "Tipo": "str", "Descripción": "descripción"}])
-            params_data = st.data_editor(df_params, num_rows="dynamic", use_container_width=True)
+            params_data = st.data_editor(df_params, num_rows="dynamic", width="stretch")
 
             st.subheader("Lógica y Control")
             t_body = st.text_area("Cuerpo (Python)", "return 'Resultado'", height=150)
