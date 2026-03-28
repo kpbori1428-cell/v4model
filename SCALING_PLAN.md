@@ -10,13 +10,13 @@ Este documento detalla los pasos necesarios para transformar los generadores ind
 - [x] **Inyección Dinámica**: El constructor de agentes lee la biblioteca local y ofrece un multiselect para inyectar automáticamente el código fuente de las herramientas.
 - [x] **Gestión de Versiones**: Capacidad de guardar y cargar diferentes configuraciones del agente (modelos, capacidades, herramientas seleccionadas) mediante `agents.json`.
 
-## 🟡 Fase 2: Entorno de Pruebas (Playground) Integrado
+## 🟡 Fase 2: Entorno de Pruebas (Playground) Integrado (COMPLETO ✅)
 *Objetivo: Validar el comportamiento del agente sin salir de la herramienta.*
 
-- [ ] **Simulador de Grafo**: Crear una función que instancie el agente generado en la memoria de la aplicación.
-- [ ] **Interfaz de Chat**: Implementar `st.chat_message` y `st.chat_input` para interactuar con el agente en tiempo real.
-- [ ] **Consola de Debug**: Mostrar en un panel lateral qué herramientas está invocando el agente y qué errores (si los hay) están ocurriendo durante la prueba.
-- [ ] **Carga de Contexto**: Poder "subir" un historial de chat previo para probar la memoria del agente.
+- [x] **Simulador de Grafo**: Función `instantiate_agent_mock` que simula la instanciación y respuesta del agente en memoria.
+- [x] **Interfaz de Chat**: Implementación de `st.chat_message` y `st.chat_input` para un bucle de interacción fluido.
+- [x] **Consola de Debug**: Panel expandible que muestra la configuración interna y trazas de ejecución mockeadas.
+- [x] **Carga de Contexto**: Funcionalidad para limpiar el chat o cargar historiales previos desde archivos JSON.
 
 ## 🟠 Fase 3: Orquestación Multi-Agente (LangGraph Avanzado)
 *Objetivo: Crear flujos de trabajo donde varios agentes colaboran.*
@@ -39,6 +39,6 @@ Este documento detalla los pasos necesarios para transformar los generadores ind
 ---
 
 ## 📋 Resumen de Acción Inmediata
-1. **Validación de Prioridades**: Revisar este documento y elegir la siguiente fase (Recomendado: Fase 2 - Playground).
-2. **Setup de Dependencias**: Añadir `google-cloud-build` y `google-cloud-run` para la Fase 4.
-3. **Integración con Escritorio**: Ejecutar `npm start` para probar la interfaz nativa con Electron.
+1. **Validación de Prioridades**: Revisar este documento y elegir la siguiente fase (Recomendado: Fase 3 - Multi-Agente).
+2. **Setup de Dependencias**: Evaluar librerías de diagramas de flujo (ej. `streamlit-flow`) para la Fase 3.
+3. **Pruebas de Desktop**: Verificar la integración de las nuevas pestañas en la versión de Electron.

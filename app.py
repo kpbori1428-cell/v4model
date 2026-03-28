@@ -36,6 +36,35 @@ def save_agent(name, config):
     with open(AGENTS_FILE, "w") as f:
         json.dump(agents, f, indent=4)
 
+# --- LÓGICA DE SIMULACIÓN (PLAYGROUND) ---
+
+def instantiate_agent_mock(config, tools_library):
+    """
+    Simula la instanciación de un agente para el playground.
+    En una versión real, esto usaría vertexai.init y ChatVertexAI.
+    """
+    selected_tools = config['tools']
+    tool_defs = [tools_library[name] for name in selected_tools if name in tools_library]
+
+    # Mock de respuesta del agente basado en la configuración
+    class MockAgent:
+        def __init__(self, config, tool_defs):
+            self.config = config
+            self.tool_defs = tool_defs
+
+        def query(self, input_text):
+            # Lógica simple de simulación
+            if not self.config['project_id']:
+                return {"output": "⚠️ Error: Falta el Project ID en la configuración.", "debug": "Config validation failed"}
+
+            tool_names = ", ".join(self.config['tools']) or "ninguna"
+            return {
+                "output": f"Simulación: Soy '{self.config['class_name']}' usando el modelo '{self.config['model_name']}'. Tengo acceso a las herramientas: {tool_names}. Me has preguntado: '{input_text}'",
+                "debug": f"Tools available: {len(self.tool_defs)} | Model: {self.config['model_name']}"
+            }
+
+    return MockAgent(config, tool_defs)
+
 # --- LÓGICA DE GENERACIÓN ---
 
 def generate_tool_code(name, description, params, body):
@@ -296,9 +325,12 @@ def main():
     if 'tools_library' not in st.session_state:
         st.session_state.tools_library = load_tools()
 
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+
     agents_library = load_agents()
 
-    tab_agent, tab_tools = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas"])
+    tab_agent, tab_tools, tab_play = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas", "🎮 Playground"])
 
     with tab_agent:
         col_side, col_main = st.columns([1, 2])
@@ -416,6 +448,57 @@ def main():
                         del st.session_state.tools_library[name]
                         save_tools(st.session_state.tools_library)
                         st.rerun()
+
+    with tab_play:
+        st.header("🎮 Agent Playground")
+
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.info("Prueba el agente configurado actualmente en un chat interactivo (Simulación).")
+        with c2:
+            c_clear, c_load = st.columns(2)
+            if c_clear.button("🗑️ Limpiar"):
+                st.session_state.messages = []
+                st.rerun()
+
+            uploaded_file = c_load.file_uploader("📂 Cargar Contexto", type=["json"], label_visibility="collapsed")
+            if uploaded_file:
+                st.session_state.messages = json.load(uploaded_file)
+                st.rerun()
+
+        # Sidebar-like debug panel in Playground
+        with st.expander("🛠️ Panel de Depuración (Internals)", expanded=False):
+            st.json(config)
+            st.write(f"Herramientas activas: {len(config['tools'])}")
+
+        # Display chat messages
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if "debug" in message and message["role"] == "assistant":
+                    with st.status("Ver traza de ejecución...", expanded=False):
+                        st.write(message["debug"])
+
+        # Chat input
+        if prompt := st.chat_input("Escribe tu consulta..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # Generate response via Mock
+            mock_agent = instantiate_agent_mock(config, st.session_state.tools_library)
+            response = mock_agent.query(prompt)
+
+            with st.chat_message("assistant"):
+                st.markdown(response["output"])
+                with st.status("Generando traza...", expanded=True):
+                    st.write(response["debug"])
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response["output"],
+                "debug": response["debug"]
+            })
 
 if __name__ == "__main__":
     main()
