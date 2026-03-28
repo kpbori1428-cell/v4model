@@ -678,28 +678,51 @@ def main():
 
         c_token, c_info = st.columns([1, 1])
         with c_token:
-            mode = st.radio("Modo de Conexión", ["Simulación", "Token Directo", "OAuth (client_secrets.json)"], horizontal=True)
+            mode = st.radio("Modo de Conexión", ["Simulación", "Token Directo", "OAuth Automático", "OAuth Manual (Código)"], horizontal=True)
 
             gcp_token = None
             if mode == "Token Directo":
                 gcp_token = st.text_input("GCP Access Token", type="password")
-            elif mode == "OAuth (client_secrets.json)":
-                secrets_file = st.file_uploader("Sube tu client_secrets.json", type=["json"])
+
+            elif mode == "OAuth Automático":
+                secrets_file = st.file_uploader("Sube tu client_secrets.json", type=["json"], key="auto_oauth")
                 if secrets_file:
                     from google_auth_oauthlib.flow import InstalledAppFlow
                     try:
-                        # Nota: Esto abrirá un navegador local en la máquina que corre Streamlit
-                        # Útil para el modo Electron/Escritorio.
                         if 'creds' not in st.session_state:
+                            client_config = json.load(secrets_file)
                             flow = InstalledAppFlow.from_client_config(
-                                json.load(secrets_file),
+                                client_config,
                                 scopes=['https://www.googleapis.com/auth/cloud-platform']
                             )
-                            st.session_state.creds = flow.run_local_server(port=0)
+                            st.info("Iniciando flujo... Revisa tu navegador.")
+                            st.session_state.creds = flow.run_local_server(port=0, prompt='consent')
                         gcp_token = st.session_state.creds.token
-                        st.success("Autenticado via OAuth")
+                        st.success("Autenticado")
                     except Exception as e:
-                        st.error(f"Error en OAuth: {e}")
+                        st.error(f"Error: {e}")
+
+            elif mode == "OAuth Manual (Código)":
+                secrets_file = st.file_uploader("Sube tu client_secrets.json", type=["json"], key="manual_oauth")
+                if secrets_file:
+                    from google_auth_oauthlib.flow import Flow
+                    client_config = json.load(secrets_file)
+                    flow = Flow.from_client_config(
+                        client_config,
+                        scopes=['https://www.googleapis.com/auth/cloud-platform'],
+                        redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+                    )
+                    auth_url, _ = flow.authorization_url(prompt='consent')
+                    st.write(f"1. Abre esta URL: [Autorizar Google]({auth_url})")
+                    code = st.text_input("2. Pega el código de autorización aquí:")
+                    if code:
+                        try:
+                            flow.fetch_token(code=code)
+                            st.session_state.creds = flow.credentials
+                            gcp_token = st.session_state.creds.token
+                            st.success("Token obtenido con éxito.")
+                        except Exception as e:
+                            st.error(f"Error al canjear código: {e}")
 
         with c_info:
             if gcp_token:

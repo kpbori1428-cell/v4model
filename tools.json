@@ -1,6 +1,0 @@
-{
-    "my_tool": {
-        "code": "def x(): pass",
-        "hitl": true
-    }
-}
