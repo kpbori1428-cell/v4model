@@ -9,7 +9,7 @@ def generate_agent_code(config):
 
     code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict"]
 
-    if config['enable_type_annotations']:
+    if config['enable_type_annotations'] or config['enable_state_mgmt']:
         code.append("""
 # schemas.py
 class RunnableConfig(TypedDict, total=False):
@@ -73,7 +73,9 @@ class {class_name}:
     def set_up(self):""")
 
     if config['enable_tracing']:
-        code.append("""        from opentelemetry import trace
+        if config['tracing_provider'] == "OpenInference":
+            code.append("""        # Tracing with OpenInference
+        from opentelemetry import trace
         from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -93,10 +95,21 @@ class {class_name}:
             SimpleSpanProcessor(cloud_trace_exporter)
         )
         LangChainInstrumentor().instrument()""")
+        else:
+            code.append("""        # Tracing with OpenLLMetry
+        from traceloop.sdk import Traceloop
+        Traceloop.init(project_id=self.project, disable_batching=True)""")
 
     if config['enable_secrets']:
         code.append("""        from google.cloud import secretmanager
         self.secret_manager_client = secretmanager.SecretManagerServiceClient()""")
+
+    if config['env_vars'].strip():
+        code.append("        import os")
+        for line in config['env_vars'].strip().split('\n'):
+            if '=' in line:
+                key, val = line.split('=', 1)
+                code.append(f'        os.environ["{key.strip()}"] = "{val.strip()}"')
 
     code.append("""        import vertexai
         from langchain_google_vertexai import ChatVertexAI
@@ -108,40 +121,49 @@ class {class_name}:
 """)
 
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
-    config_param = "config: RunnableConfig = None, " if config['enable_type_annotations'] else ""
+    config_param = "config: RunnableConfig = None, " if (config['enable_type_annotations'] or config['enable_state_mgmt']) else ""
+
+    code.insert(1, "from langchain.load.dump import dumpd")
 
     code.append(f"""    {query_decorator}def query(self, {config_param}**kwargs):
-        from langchain.load.dump import dumpd
         return dumpd(self.graph.invoke(**kwargs))""")
 
     if config['enable_async']:
         code.append(f"""
     {query_decorator}async def async_query(self, {config_param}**kwargs):
-        from langchain.load.dump import dumpd
         result = await self.graph.ainvoke(**kwargs)
         return dumpd(result)""")
 
     if config['enable_streaming']:
         code.append(f"""
     {query_decorator}def stream_query(self, {config_param}**kwargs) -> Iterable:
-        from langchain.load.dump import dumpd
         for chunk in self.graph.stream(**kwargs):
             yield dumpd(chunk)""")
 
     if config['enable_async_streaming']:
         code.append(f"""
     {query_decorator}async def async_stream_query(self, {config_param}**kwargs):
-        from langchain.load.dump import dumpd
         async for chunk in self.graph.astream(**kwargs):
             yield dumpd(chunk)""")
+
+    if config['enable_state_mgmt']:
+        code.append(f"""
+    {query_decorator}def get_state(self, config: RunnableConfig = None):
+        return self.graph.get_state(config=config)._asdict()
+
+    {query_decorator}def get_state_history(self, config: RunnableConfig = None) -> Iterable:
+        for state_snapshot in self.graph.get_state_history(config=config):
+            yield state_snapshot._asdict()""")
 
     if config['enable_register_ops']:
         sync_ops = ["query"]
         if config['enable_async']: sync_ops.append("async_query")
+        if config['enable_state_mgmt']: sync_ops.append("get_state")
 
         stream_ops = []
         if config['enable_streaming']: stream_ops.append("stream_query")
         if config['enable_async_streaming']: stream_ops.append("async_stream_query")
+        if config['enable_state_mgmt']: stream_ops.append("get_state_history")
 
         code.append(f"""
     def register_operations(self):
@@ -155,6 +177,7 @@ class {class_name}:
             code.append("""
     def get_credentials(self):
         import google.auth
+        import google.auth.transport.requests
         # Note: the credential lives for 1 hour by default.
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         creds.refresh(google.auth.transport.requests.Request())
@@ -178,12 +201,62 @@ class {class_name}:
             credentials=credentials,
         )""")
 
+    # Add Usage Examples as a comment block
+    code.append(f"""
+\"\"\"
+EJEMPLOS DE USO LOCAL (Basados en README.md):
+
+# 1. Instanciar el agente
+agent = {class_name}(
+    project="{project}",
+    location="{location}"
+)
+agent.set_up()
+
+# 2. Probar consulta síncrona
+response = agent.query(input="Hola, ¿qué puedes hacer?")
+print(response)
+""")
+    if config['enable_async']:
+        code.append(f"""
+# 3. Probar consulta asíncrona
+# import asyncio
+# response = asyncio.run(agent.async_query(input="..."))
+""")
+    if config['enable_streaming']:
+        code.append(f"""
+# 4. Probar streaming
+# for chunk in agent.stream_query(input="..."):
+#     print(chunk)
+""")
+    code.append("\"\"\"")
+
     return "\n".join(code)
 
 def main():
     st.set_page_config(page_title="Vertex AI Agent Generator", layout="wide")
     st.title("Vertex AI Agent Generator")
     st.markdown("Crea un sistema que se base en una interfaz visual para el desarrollo de un agente basado en el `README.md`.")
+
+    with st.expander("🚀 Cómo utilizar este generador"):
+        st.markdown("""
+        ### 1. Configuración
+        Usa la **barra lateral** para definir los metadatos básicos (Project ID, Location, Model).
+
+        ### 2. Personalización
+        - **Herramientas**: Escribe los nombres de las funciones que tu agente podrá usar (ej: `get_exchange_rate`).
+        - **Capacidades**: Activa el soporte para ejecución asíncrona, streaming o gestión de estado.
+        - **Integraciones**: Habilita Cloud Trace o Secret Manager según tus necesidades.
+
+        ### 3. Generación y Uso
+        - El código se actualiza automáticamente abajo.
+        - Haz clic en **"Descargar agente (.py)"** para guardar el archivo.
+        - Para ejecutarlo, asegúrate de tener instaladas las dependencias:
+          ```bash
+          pip install streamlit langchain-google-vertexai langgraph google-cloud-secret-manager opentelemetry-api opentelemetry-sdk
+          ```
+        - Revisa los **ejemplos de uso** al final del código generado para probarlo localmente.
+        """)
 
     with st.sidebar:
         st.header("Configuración Básica")
@@ -206,12 +279,17 @@ def main():
         enable_async_streaming = st.checkbox("Soportar streaming asíncrono (`async_stream_query`)", value=False)
         enable_register_ops = st.checkbox("Registrar métodos personalizados (`register_operations`)", value=False)
         enable_type_annotations = st.checkbox("Anotaciones de tipo avanzado (`TypedDict`)", value=False)
+        enable_state_mgmt = st.checkbox("Métodos de gestión de estado (`get_state`, `get_state_history`)", value=False)
 
     with col2:
         st.subheader("Integraciones y Avanzado")
-        enable_tracing = st.checkbox("Habilitar Cloud Trace (OpenInference)", value=False)
+        enable_tracing = st.checkbox("Habilitar Cloud Trace", value=False)
+        tracing_provider = st.selectbox("Proveedor de Tracing", ["OpenInference", "OpenLLMetry"], disabled=not enable_tracing)
+
         enable_secrets = st.checkbox("Integración con Secret Manager", value=False)
         enable_error_handling = st.checkbox("Incluir manejo de errores (`error_wrapper`)", value=True)
+
+        env_vars = st.text_area("Variables de entorno (KEY=VALUE, una por línea)", "")
 
         credential_type = st.selectbox(
             "Gestión de Credenciales",
@@ -228,11 +306,14 @@ def main():
         'enable_streaming': enable_streaming,
         'enable_async_streaming': enable_async_streaming,
         'enable_tracing': enable_tracing,
+        'tracing_provider': tracing_provider,
         'enable_secrets': enable_secrets,
         'enable_error_handling': enable_error_handling,
         'credential_type': credential_type,
         'enable_register_ops': enable_register_ops,
-        'enable_type_annotations': enable_type_annotations
+        'enable_type_annotations': enable_type_annotations,
+        'enable_state_mgmt': enable_state_mgmt,
+        'env_vars': env_vars
     }
 
     st.divider()
