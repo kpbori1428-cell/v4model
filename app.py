@@ -37,21 +37,41 @@ def save_agent(name, config):
     with open(AGENTS_FILE, "w") as f:
         json.dump(agents, f, indent=4)
 
+# --- SYSTEM TOOLS (AUTONOMOUS EVOLUTION) ---
+
+def system_register_skill(name: str, description: str, params: list, code: str):
+    """Permite al agente registrar una nueva habilidad técnica en la biblioteca."""
+    library = load_tools()
+    tool_data = {
+        "code": generate_tool_code(name, description, params, code),
+        "hitl": False # Por defecto, herramientas auto-generadas no tienen HITL a menos que se pida
+    }
+    library[name] = tool_data
+    save_tools(library)
+    return f"Habilidad '{name}' registrada con éxito en tools.json."
+
+def system_define_agent(name: str, config: dict):
+    """Permite al agente diseñar y guardar una nueva configuración de agente especializado."""
+    save_agent(name, config)
+    return f"Agente '{name}' guardado con éxito en agents.json."
+
 # --- LÓGICA DE SIMULACIÓN Y CONEXIÓN REAL (PLAYGROUND) ---
 
-def instantiate_agent_live(config, tools_library, access_token=None):
+def instantiate_agent_live(config, tools_library, access_token=None, system_tools=None):
     """
     Instancia un agente para el playground.
     Si access_token existe, intenta conexión real via REST.
     """
     selected_tools = config['tools']
     tool_defs = [tools_library[name] for name in selected_tools if name in tools_library]
+    all_tools = {**(system_tools or {})}
 
     class RealAgent:
-        def __init__(self, config, tool_defs, token):
+        def __init__(self, config, tool_defs, token, sys_tools):
             self.config = config
             self.tool_defs = tool_defs
             self.token = token
+            self.sys_tools = sys_tools
             self.base_url = f"https://{config['location']}-aiplatform.googleapis.com/v1/projects/{config['project_id']}/locations/{config['location']}/publishers/google/models/{config['model_name']}:generateContent"
 
         def query(self, input_text):
@@ -112,9 +132,9 @@ def instantiate_agent_live(config, tools_library, access_token=None):
             }
             return {"output": resp, "debug": json.dumps(debug_info, indent=2)}
 
-    return RealAgent(config, tool_defs, access_token)
+    return RealAgent(config, tool_defs, access_token, system_tools)
 
-def instantiate_agent_mock(config, tools_library):
+def instantiate_agent_mock(config, tools_library, system_tools=None):
     """
     Simula la instanciación de un agente para el playground.
     En una versión real, esto usaría vertexai.init y ChatVertexAI.
@@ -124,9 +144,10 @@ def instantiate_agent_mock(config, tools_library):
 
     # Mock de respuesta del agente basado en la configuración
     class MockAgent:
-        def __init__(self, config, tool_defs):
+        def __init__(self, config, tool_defs, sys_tools):
             self.config = config
             self.tool_defs = tool_defs
+            self.sys_tools = sys_tools
 
         def query(self, input_text):
             # Lógica de simulación avanzada (Misión Multi-Agente)
@@ -173,12 +194,20 @@ def instantiate_agent_mock(config, tools_library):
                 "edges_active": len(edges)
             }
 
+            # Simular detección de llamada a herramienta de sistema
+            if "register_skill" in input_text or "define_agent" in input_text:
+                trace.append("🛠️ [SYSTEM TOOL DETECTED] Simulando ejecución de herramienta de evolución...")
+                if "register_skill" in input_text:
+                    trace.append("✅ Habilidad registrada en tools.json (Simulado)")
+                if "define_agent" in input_text:
+                    trace.append("✅ Nuevo agente guardado en agents.json (Simulado)")
+
             return {
                 "output": resp,
                 "debug": json.dumps(debug_info, indent=2)
             }
 
-    return MockAgent(config, tool_defs)
+    return MockAgent(config, tool_defs, system_tools)
 
 # --- LÓGICA DE GENERACIÓN ---
 
@@ -233,11 +262,17 @@ class RunnableConfig(TypedDict, total=False):
     configurable: Dict[str, Any]
 """)
 
-    # Generación dinámica del Estado
+    # Generación dinámica del Estado (Soporte de Artefactos Estrictos)
     state_schema = config.get('state_schema', [])
     state_lines = ["class AgentState(TypedDict):"]
     if not any(v['Variable'] == 'messages' for v in state_schema):
         state_lines.append("    messages: Annotated[List[Any], lambda x, y: x + y]")
+
+    # Inyectar artefactos obligatorios para misiones profesionales
+    if not any(v['Variable'] == 'context_bundle' for v in state_schema):
+        state_lines.append("    context_bundle: Dict[str, Any]")
+    if not any(v['Variable'] == 'implementation_plan' for v in state_schema):
+        state_lines.append("    implementation_plan: Dict[str, Any]")
 
     for var in state_schema:
         v_name = var['Variable']
@@ -380,16 +415,23 @@ class {class_name}:
             node_name = node['Nodo']
             node_prompt = node['Prompt']
 
-            def make_node_func(p):
+            def make_node_func(p, name):
                 def _node(state):
-                    messages = [SystemMessage(content=p)] + state['messages']
-                    # En modo multi-nodo, el binding de herramientas suele ser para nodos específicos
-                    # Aquí lo aplicamos a todos para simplificar el esqueleto avanzado
+                    # Inyectar artefactos en el prompt para asegurar consistencia
+                    context = state.get('context_bundle', {{}})
+                    plan = state.get('implementation_plan', {{}})
+
+                    artifact_prompt = f"\\n\\n[CONTEXTO ACTUAL]: {{json.dumps(context)}}\\n[PLAN ACTUAL]: {{json.dumps(plan)}}"
+                    messages = [SystemMessage(content=p + artifact_prompt)] + state['messages']
+
                     response = self.llm_with_tools.invoke(messages)
+
+                    # Lógica de extracción de artefactos (Simulada para el template)
+                    # En producción, esto usaría Structured Output / Pydantic
                     return {{"messages": [response]}}
                 return _node
 
-            workflow.add_node(node_name, make_node_func(node_prompt))
+            workflow.add_node(node_name, make_node_func(node_prompt, node_name))
 
         # Configuración de Flujo Dinámico (Basado en Edges)
         for edge in self.edges_config:
@@ -591,6 +633,30 @@ def main():
             "enable_tracing": True, "tracing_provider": "OpenInference", "enable_secrets": True,
             "enable_error_handling": True, "credential_type": "OAuth", "enable_register_ops": True,
             "enable_type_annotations": True, "enable_state_mgmt": True, "env_vars": ""
+        }
+
+    META_PRESET_NAME = "🤖 Meta-Arquitecto (Evolución Autónoma)"
+    if META_PRESET_NAME not in agents_library:
+        agents_library[META_PRESET_NAME] = {
+            "class_name": "MetaArchitect",
+            "project_id": "",
+            "location": "us-central1",
+            "model_name": "gemini-2.5-flash",
+            "tools": [],
+            "nodes": [
+                {"Nodo": "SelfAnalysis", "Prompt": "Analiza las capacidades actuales del sistema. Si falta una habilidad o un agente especializado para la tarea del usuario, utiliza 'register_skill' o 'define_agent'."},
+                {"Nodo": "Orchestrator", "Prompt": "Una vez creadas las nuevas capacidades, delega la tarea final al nuevo agente o utiliza la nueva habilidad."}
+            ],
+            "edges": [
+                {"Origen": "SelfAnalysis", "Destino": "Orchestrator", "Condición": "Éxito"},
+                {"Origen": "Orchestrator", "Destino": "END", "Condición": "Éxito"}
+            ],
+            "temperature": 0.3, "top_p": 0.9, "top_k": 40, "max_tokens": 2048,
+            "state_schema": [],
+            "enable_async": True, "enable_streaming": False, "enable_async_streaming": False,
+            "enable_tracing": False, "tracing_provider": "OpenInference", "enable_secrets": False,
+            "enable_error_handling": True, "credential_type": "OAuth", "enable_register_ops": False,
+            "enable_type_annotations": False, "enable_state_mgmt": True, "env_vars": ""
         }
 
     tab_agent, tab_tools, tab_play = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas", "🎮 Playground"])
@@ -853,7 +919,22 @@ def main():
 
             # Generate response via Live/Mock Agent
             with st.spinner("🤖 El agente está pensando..."):
-                agent = instantiate_agent_live(config, st.session_state.tools_library, access_token=gcp_token)
+                # Inyectar herramientas de sistema para evolución autónoma
+                sys_tools = {
+                    "register_skill": system_register_skill,
+                    "define_agent": system_define_agent
+                }
+
+                # Combinar biblioteca local con herramientas de sistema si el LLM las necesita
+                # En modo real/REST esto requeriría un binding más complejo, pero para la demo
+                # lo manejamos en la lógica de instanciación.
+
+                # Usar Mock si no hay token, Real si lo hay
+                if gcp_token:
+                    agent = instantiate_agent_live(config, st.session_state.tools_library, access_token=gcp_token, system_tools=sys_tools)
+                else:
+                    agent = instantiate_agent_mock(config, st.session_state.tools_library, system_tools=sys_tools)
+
                 response = agent.query(prompt)
 
             with st.chat_message("assistant"):

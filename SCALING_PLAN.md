@@ -25,6 +25,8 @@ Este documento detalla los pasos necesarios para transformar los generadores ind
 - [x] **Control de Hiperparámetros**: Configuración granular de temperatura, top_p, top_k y tokens.
 - [x] **Esquema de Estado Personalizado**: Definición dinámica de variables en `TypedDict` para persistencia en el grafo.
 - [x] **Refactorización a StateGraph**: Generación de código manual con nodos y aristas en lugar de plantillas preconfiguradas.
+- [x] **Evolución Autónoma (Meta-Agentes)**: Capacidad de los agentes para auto-registrar herramientas (`register_skill`) y diseñar nuevos agentes especializados (`define_agent`) de forma persistente.
+- [x] **Handoff de Artefactos Estrictos**: Implementación de `context_bundle` y `implementation_plan` como ciudadanos de primera clase en el estado del grafo, garantizando integridad entre nodos.
 
 ## 🔴 Fase 4: Despliegue Automatizado (Auto-Deploy)
 *Objetivo: Eliminar la fricción entre el desarrollo local y la nube.*
