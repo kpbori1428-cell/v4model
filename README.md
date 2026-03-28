@@ -3,14 +3,14 @@ Desarrollar un agente personalizado
 Las plantillas de agentes de Vertex AI Agent Engine se definen como clases de Python. En los siguientes pasos se muestra cómo crear una plantilla personalizada para crear instancias de agentes que se puedan desplegar en Vertex AI:
 
 Ejemplo básico
-(Opcional) Respuestas graduales
-(Opcional) Registrar métodos personalizados
-(Opcional) Proporcionar anotaciones de tipo
-(Opcional) Enviar trazas a Cloud Trace
-(Opcional) Trabajar con variables de entorno
-(Opcional) Integración con Secret Manager
-(Opcional) Gestión de credenciales
-(Opcional) Gestión de errores
+ Respuestas graduales
+ Registrar métodos personalizados
+ Proporcionar anotaciones de tipo
+ Enviar trazas a Cloud Trace
+ Trabajar con variables de entorno
+ Integración con Secret Manager
+ Gestión de credenciales
+ Gestión de errores
 Ejemplo básico
 Por poner un ejemplo básico, la siguiente clase de Python es una plantilla para crear instancias de agentes que se pueden desplegar en Vertex AI (puedes asignar a la variable CLASS_NAME un valor como MyAgent):
 
