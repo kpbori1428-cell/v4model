@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import requests
 from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict
 
 # --- CONFIGURACIÓN DE PERSISTENCIA ---
@@ -36,7 +37,82 @@ def save_agent(name, config):
     with open(AGENTS_FILE, "w") as f:
         json.dump(agents, f, indent=4)
 
-# --- LÓGICA DE SIMULACIÓN (PLAYGROUND) ---
+# --- LÓGICA DE SIMULACIÓN Y CONEXIÓN REAL (PLAYGROUND) ---
+
+def instantiate_agent_live(config, tools_library, access_token=None):
+    """
+    Instancia un agente para el playground.
+    Si access_token existe, intenta conexión real via REST.
+    """
+    selected_tools = config['tools']
+    tool_defs = [tools_library[name] for name in selected_tools if name in tools_library]
+
+    class RealAgent:
+        def __init__(self, config, tool_defs, token):
+            self.config = config
+            self.tool_defs = tool_defs
+            self.token = token
+            self.base_url = f"https://{config['location']}-aiplatform.googleapis.com/v1/projects/{config['project_id']}/locations/{config['location']}/publishers/google/models/{config['model_name']}:generateContent"
+
+        def query(self, input_text):
+            if not self.token:
+                return self._mock_response(input_text)
+
+            # Llamada Real via REST (Simplificada para Gemini)
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            payload = {
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"{self.config['system_prompt']}\n\nUser input: {input_text}"}]}
+                ],
+                "generationConfig": {
+                    "temperature": self.config['temperature'],
+                    "topP": self.config['top_p'],
+                    "topK": self.config['top_k'],
+                    "maxOutputTokens": self.config['max_tokens']
+                }
+            }
+
+            try:
+                response = requests.post(self.base_url, headers=headers, json=payload, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    try:
+                        text = data['candidates'][0]['content']['parts'][0]['text']
+                        return {"output": text, "debug": json.dumps(data, indent=2)}
+                    except (KeyError, IndexError):
+                        return {"output": "Respuesta recibida pero con formato inesperado.", "debug": json.dumps(data, indent=2)}
+                else:
+                    return {
+                        "output": f"❌ Error de API ({response.status_code}): {response.text}",
+                        "debug": f"Status: {response.status_code}\nHeaders: {response.headers}"
+                    }
+            except Exception as e:
+                return {"output": f"❌ Error de Conexión: {str(e)}", "debug": "Connection failed"}
+
+        def _mock_response(self, input_text):
+            tool_names = ", ".join(self.config['tools']) or "ninguna"
+            sys_p = self.config['system_prompt']
+            resp = f"**[MOCK]** Respondiendo como: {self.config['class_name']}\n\n"
+            resp += f"Instrucciones: _{sys_p}_\n\n"
+            resp += f"Respuesta a '{input_text}': Entendido. Utilizaré mi configuración (Temp: {self.config['temperature']}) para asistirte."
+
+            debug_info = {
+                "mode": "Simulated (No Token)",
+                "model": self.config['model_name'],
+                "params": {
+                    "temperature": self.config['temperature'],
+                    "top_p": self.config['top_p'],
+                    "max_tokens": self.config['max_tokens']
+                },
+                "tools_active": tool_names
+            }
+            return {"output": resp, "debug": json.dumps(debug_info, indent=2)}
+
+    return RealAgent(config, tool_defs, access_token)
 
 def instantiate_agent_mock(config, tools_library):
     """
@@ -562,9 +638,18 @@ def main():
     with tab_play:
         st.header("🎮 Agent Playground")
 
+        c_token, c_info = st.columns([1, 1])
+        with c_token:
+            gcp_token = st.text_input("GCP Access Token (Opcional)", type="password", help="Si lo proporcionas, las consultas serán REALES a Vertex AI.")
+        with c_info:
+            if gcp_token:
+                st.success("Modo: EN VIVO (Llamadas reales activadas)")
+            else:
+                st.info("Modo: SIMULACIÓN (Mock local)")
+
         c1, c2 = st.columns([3, 1])
         with c1:
-            st.info("Prueba el agente configurado actualmente en un chat interactivo (Simulación).")
+            st.caption("Interactúa con tu agente. Si usas modo 'En Vivo', asegúrate que el Project ID y Location sean correctos.")
         with c2:
             c_clear, c_load = st.columns(2)
             if c_clear.button("🗑️ Limpiar"):
@@ -595,9 +680,9 @@ def main():
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-            # Generate response via Mock
-            mock_agent = instantiate_agent_mock(config, st.session_state.tools_library)
-            response = mock_agent.query(prompt)
+            # Generate response via Live/Mock Agent
+            agent = instantiate_agent_live(config, st.session_state.tools_library, access_token=gcp_token)
+            response = agent.query(prompt)
 
             with st.chat_message("assistant"):
                 st.markdown(response["output"])

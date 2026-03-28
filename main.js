@@ -18,7 +18,8 @@ function createWindow() {
 
   // Start Streamlit server via specialized launcher
   // This ensures the correct environment and flags are used for the desktop version
-  streamlitProcess = spawn('python3', ['launcher.py']);
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  streamlitProcess = spawn(pythonCmd, ['launcher.py']);
 
   streamlitProcess.stdout.on('data', (data) => {
     console.log(`Streamlit: ${data}`);
