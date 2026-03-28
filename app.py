@@ -181,11 +181,18 @@ def generate_agent_code(config, tools_library):
     code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict, Annotated, List, Union"]
 
     # Inyectar definiciones de herramientas seleccionadas
+    hitl_tools = []
     if selected_tool_names:
         code.append("\n# --- HERRAMIENTAS (TOOLS) ---")
         for name in selected_tool_names:
             if name in tools_library:
-                code.append(tools_library[name])
+                t_data = tools_library[name]
+                # Backward compatibility check
+                if isinstance(t_data, str):
+                    code.append(t_data)
+                else:
+                    code.append(t_data['code'])
+                    if t_data.get('hitl'): hitl_tools.append(name)
     else:
         code.append("""
 # EJEMPLO DE CREACIÓN DE HERRAMIENTA (Tool):
@@ -278,7 +285,7 @@ class {class_name}:
         self.tools = tools
         self.project = project
         self.location = location
-        self.system_prompt = \"\"\"{config['system_prompt']}\"\"\"
+        self.nodes_config = {config['nodes']}
 
     def set_up(self):""")
 
@@ -324,6 +331,7 @@ class {class_name}:
     code.append(f"""        import vertexai
         from langchain_google_vertexai import ChatVertexAI
         from langgraph.graph import StateGraph, END
+        from langgraph.checkpoint.sqlite import SqliteSaver
         from langchain_core.messages import SystemMessage
 
         vertexai.init(project=self.project, location=self.location)
@@ -342,18 +350,31 @@ class {class_name}:
         else:
             self.llm_with_tools = self.llm
 
-        # Definición manual del Grafo (StateGraph)
+        # Definición manual del Grafo (StateGraph Multi-Nodo)
         workflow = StateGraph(AgentState)
 
-        # Nodo de LLM
-        def call_model(state):
-            messages = [SystemMessage(content=self.system_prompt)] + state['messages']
-            response = self.llm_with_tools.invoke(messages)
-            return {{"messages": [response]}}
+        # Generación dinámica de nodos
+        for node in self.nodes_config:
+            node_name = node['Nodo']
+            node_prompt = node['Prompt']
 
-        workflow.add_node("agent", call_model)
+            def make_node_func(p):
+                def _node(state):
+                    messages = [SystemMessage(content=p)] + state['messages']
+                    # En modo multi-nodo, el binding de herramientas suele ser para nodos específicos
+                    # Aquí lo aplicamos a todos para simplificar el esqueleto avanzado
+                    response = self.llm_with_tools.invoke(messages)
+                    return {"messages": [response]}
+                return _node
 
-        # Lógica de herramientas (Simplificada para el esqueleto manual)
+            workflow.add_node(node_name, make_node_func(node_prompt))
+
+        # Configuración de Flujo (Lineal por defecto en el generador)
+        node_names = [n['Nodo'] for n in self.nodes_config]
+        for i in range(len(node_names) - 1):
+            workflow.add_edge(node_names[i], node_names[i+1])
+
+        # Lógica de herramientas vinculada al último nodo o flujo circular
         if self.tools:
             from langgraph.prebuilt import ToolNode
             workflow.add_node("tools", ToolNode(self.tools))
@@ -364,13 +385,22 @@ class {class_name}:
                     return "tools"
                 return END
 
-            workflow.add_conditional_edges("agent", should_continue)
-            workflow.add_edge("tools", "agent")
+            # El último nodo decide si ir a herramientas o terminar
+            workflow.add_conditional_edges(node_names[-1], should_continue)
+            workflow.add_edge("tools", node_names[0]) # Vuelve al inicio tras usar herramienta
         else:
-            workflow.add_edge("agent", END)
+            workflow.add_edge(node_names[-1], END)
 
-        workflow.set_entry_point("agent")
-        self.graph = workflow.compile()
+        workflow.set_entry_point(node_names[0])
+
+        # Implementación de HITL y Persistencia
+        interrupt_tools = {hitl_tools}
+        memory = SqliteSaver.from_conn_string(":memory:") # Cambiar a ruta de archivo para persistencia real
+
+        if interrupt_tools:
+            self.graph = workflow.compile(checkpointer=memory, interrupt_before=["tools"])
+        else:
+            self.graph = workflow.compile(checkpointer=memory)
 """)
 
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
@@ -531,11 +561,14 @@ def main():
             t_prompt, t_params, t_state, t_integrations = st.tabs(["✍️ Prompt Studio", "🎚️ Parámetros", "🧠 Estado", "🔌 Integraciones"])
 
             with t_prompt:
-                st.subheader("Instrucciones del Sistema (System Prompt)")
-                system_prompt = st.text_area("Define el rol y comportamiento del agente",
-                                           value=get_v('system_prompt', "Eres un asistente servicial y experto."),
-                                           height=200)
-                st.caption("Tip: Puedes usar {variables} que luego inyectarás en el estado.")
+                st.subheader("Arquitectura de Nodos (Multi-Agente)")
+                st.write("Define los roles que compondrán a tu agente. Cada nodo puede tener su propia personalidad.")
+
+                default_nodes = get_v('nodes', [{"Nodo": "manager", "Prompt": "Eres el coordinador central. Analiza la petición y delega."}])
+                df_nodes = pd.DataFrame(default_nodes)
+                nodes_config = st.data_editor(df_nodes, num_rows="dynamic", use_container_width=True)
+
+                st.caption("Tip: El primer nodo será el punto de entrada.")
 
             with t_params:
                 st.subheader("Configuración del Modelo")
@@ -580,7 +613,7 @@ def main():
             config = {
                 'class_name': class_name, 'project_id': project_id, 'location': location,
                 'model_name': model_name, 'tools': selected_tools,
-                'system_prompt': system_prompt, 'temperature': temperature,
+                'nodes': nodes_config.to_dict('records'), 'temperature': temperature,
                 'top_p': top_p, 'top_k': top_k, 'max_tokens': max_tokens,
                 'state_schema': state_schema.to_dict('records'),
                 'enable_async': enable_async, 'enable_streaming': enable_streaming,
@@ -614,12 +647,17 @@ def main():
             df_params = pd.DataFrame([{"Nombre": "param1", "Tipo": "str", "Descripción": "descripción"}])
             params_data = st.data_editor(df_params, num_rows="dynamic", use_container_width=True)
 
-            st.subheader("Lógica")
+            st.subheader("Lógica y Control")
             t_body = st.text_area("Cuerpo (Python)", "return 'Resultado'", height=150)
+            t_hitl = st.checkbox("Requiere aprobación humana (HITL)", value=False, help="El agente se detendrá antes de ejecutar esta herramienta.")
 
             if st.button("✅ Guardar en Biblioteca"):
-                tool_code = generate_tool_code(t_name, t_desc, params_data.to_dict('records'), t_body)
-                st.session_state.tools_library[t_name] = tool_code
+                # Save as dict to keep metadata
+                tool_data = {
+                    "code": generate_tool_code(t_name, t_desc, params_data.to_dict('records'), t_body),
+                    "hitl": t_hitl
+                }
+                st.session_state.tools_library[t_name] = tool_data
                 save_tools(st.session_state.tools_library)
                 st.success(f"Herramienta '{t_name}' guardada correctamente.")
 
@@ -640,12 +678,34 @@ def main():
 
         c_token, c_info = st.columns([1, 1])
         with c_token:
-            gcp_token = st.text_input("GCP Access Token (Opcional)", type="password", help="Si lo proporcionas, las consultas serán REALES a Vertex AI.")
+            mode = st.radio("Modo de Conexión", ["Simulación", "Token Directo", "OAuth (client_secrets.json)"], horizontal=True)
+
+            gcp_token = None
+            if mode == "Token Directo":
+                gcp_token = st.text_input("GCP Access Token", type="password")
+            elif mode == "OAuth (client_secrets.json)":
+                secrets_file = st.file_uploader("Sube tu client_secrets.json", type=["json"])
+                if secrets_file:
+                    from google_auth_oauthlib.flow import InstalledAppFlow
+                    try:
+                        # Nota: Esto abrirá un navegador local en la máquina que corre Streamlit
+                        # Útil para el modo Electron/Escritorio.
+                        if 'creds' not in st.session_state:
+                            flow = InstalledAppFlow.from_client_config(
+                                json.load(secrets_file),
+                                scopes=['https://www.googleapis.com/auth/cloud-platform']
+                            )
+                            st.session_state.creds = flow.run_local_server(port=0)
+                        gcp_token = st.session_state.creds.token
+                        st.success("Autenticado via OAuth")
+                    except Exception as e:
+                        st.error(f"Error en OAuth: {e}")
+
         with c_info:
             if gcp_token:
-                st.success("Modo: EN VIVO (Llamadas reales activadas)")
+                st.success("🔥 MODO REAL ACTIVADO")
             else:
-                st.info("Modo: SIMULACIÓN (Mock local)")
+                st.info("🤖 Modo Simulación (Local)")
 
         c1, c2 = st.columns([3, 1])
         with c1:

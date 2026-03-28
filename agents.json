@@ -1,0 +1,10 @@
+{
+    "advanced_v1": {
+        "nodes": [
+            {
+                "Nodo": "n1",
+                "Prompt": "p1"
+            }
+        ]
+    }
+}
