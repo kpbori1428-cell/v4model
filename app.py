@@ -547,7 +547,7 @@ def main():
             class_name = st.text_input("Nombre de la Clase", value=get_v('class_name', "MyAgent"))
             project_id = st.text_input("Project ID", value=get_v('project_id', ""), placeholder="your-project-id")
             location = st.text_input("Location", value=get_v('location', "us-central1"))
-            model_name = st.text_input("Model Name", value=get_v('model_name', "gemini-1.5-flash-002"))
+            model_name = st.text_input("Model Name", value=get_v('model_name', "gemini-2.5-flash"))
 
             st.subheader("Habilidades Seleccionadas")
             selected_tools = st.multiselect(
