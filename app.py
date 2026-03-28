@@ -1,15 +1,36 @@
 import streamlit as st
+import pandas as pd
+from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict
 
-def generate_agent_code(config):
+# --- LÓGICA DE GENERACIÓN ---
+
+def generate_tool_code(name, description, params, body):
+    args_str = ", ".join([f"{p['Nombre']}: {p['Tipo']}" for p in params])
+    docstring = f'    """{description}\n\n    Args:\n'
+    for p in params:
+        docstring += f"        {p['Nombre']}: {p['Descripción']}\n"
+    docstring += '    """'
+    body_lines = body.strip().split('\n')
+    indented_body = "\n".join([f"    {line}" for line in body_lines])
+    return f"def {name}({args_str}):\n{docstring}\n{indented_body}\n"
+
+def generate_agent_code(config, tools_library):
     class_name = config['class_name']
     project = config['project_id']
     location = config['location']
     model = config['model_name']
-    tools = config['tools']
+    selected_tool_names = config['tools']
 
     code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict"]
 
-    code.append("""
+    # Inyectar definiciones de herramientas seleccionadas
+    if selected_tool_names:
+        code.append("\n# --- HERRAMIENTAS (TOOLS) ---")
+        for name in selected_tool_names:
+            if name in tools_library:
+                code.append(tools_library[name])
+    else:
+        code.append("""
 # EJEMPLO DE CREACIÓN DE HERRAMIENTA (Tool):
 # def get_weather(location: str):
 #     \"\"\"Obtiene el clima actual para una ubicación específica.
@@ -66,7 +87,8 @@ def _format_error(func, err):
     }
 """)
 
-    tools_list = f"[{tools}]" if tools.strip() else "[]"
+    tools_str = ", ".join(selected_tool_names) if selected_tool_names else ""
+    tools_list = f"[{tools_str}]" if tools_str else "[]"
 
     code.append(f"""
 class {class_name}:
@@ -213,7 +235,6 @@ class {class_name}:
             credentials=credentials,
         )""")
 
-    # Add Usage Examples as a comment block
     code.append(f"""
 \"\"\"
 EJEMPLOS DE USO LOCAL (Basados en README.md):
@@ -228,119 +249,103 @@ agent.set_up()
 # 2. Probar consulta síncrona
 response = agent.query(input="Hola, ¿qué puedes hacer?")
 print(response)
-""")
-    if config['enable_async']:
-        code.append(f"""
-# 3. Probar consulta asíncrona
-# import asyncio
-# response = asyncio.run(agent.async_query(input="..."))
-""")
-    if config['enable_streaming']:
-        code.append(f"""
-# 4. Probar streaming
-# for chunk in agent.stream_query(input="..."):
-#     print(chunk)
-""")
-    code.append("\"\"\"")
+\"\"\"""")
 
     return "\n".join(code)
 
+# --- APLICACIÓN PRINCIPAL ---
+
 def main():
-    st.set_page_config(page_title="Vertex AI Agent Generator", layout="wide")
-    st.title("Vertex AI Agent Generator")
-    st.markdown("Crea un sistema que se base en una interfaz visual para el desarrollo de un agente basado en el `README.md`.")
+    st.set_page_config(page_title="Vertex AI Agent Suite", layout="wide")
+    st.title("🤖 Vertex AI Agent Suite")
 
-    with st.expander("🚀 Cómo utilizar este generador"):
-        st.markdown("""
-        ### 1. Configuración
-        Usa la **barra lateral** para definir los metadatos básicos (Project ID, Location, Model).
+    if 'tools_library' not in st.session_state:
+        st.session_state.tools_library = {}
 
-        ### 2. Personalización
-        - **Herramientas**: Escribe los nombres de las funciones que tu agente podrá usar (ej: `get_exchange_rate`).
-        - **Capacidades**: Activa el soporte para ejecución asíncrona, streaming o gestión de estado.
-        - **Integraciones**: Habilita Cloud Trace o Secret Manager según tus necesidades.
+    tab_agent, tab_tools = st.tabs(["🚀 Constructor de Agentes", "🛠️ Diseñador de Herramientas"])
 
-        ### 3. Generación y Uso
-        - El código se actualiza automáticamente abajo.
-        - Haz clic en **"Descargar agente (.py)"** para guardar el archivo.
-        - Para ejecutarlo, asegúrate de tener instaladas las dependencias:
-          ```bash
-          pip install streamlit langchain-google-vertexai langgraph google-cloud-secret-manager opentelemetry-api opentelemetry-sdk
-          ```
-        - Revisa los **ejemplos de uso** al final del código generado para probarlo localmente.
-        """)
+    with tab_agent:
+        col_side, col_main = st.columns([1, 2])
 
-    with st.sidebar:
-        st.header("Configuración Básica")
-        class_name = st.text_input("Nombre de la Clase del Agente", value="MyAgent")
-        project_id = st.text_input("Project ID", placeholder="your-project-id")
-        location = st.text_input("Location", value="us-central1")
-        model_name = st.text_input("Model Name", value="gemini-1.5-flash-002")
+        with col_side:
+            st.header("Configuración")
+            class_name = st.text_input("Nombre de la Clase", value="MyAgent")
+            project_id = st.text_input("Project ID", placeholder="your-project-id")
+            location = st.text_input("Location", value="us-central1")
+            model_name = st.text_input("Model Name", value="gemini-1.5-flash-002")
 
-    st.info("Configura los detalles del agente en la barra lateral y en las opciones de abajo.")
+            st.subheader("Habilidades Seleccionadas")
+            selected_tools = st.multiselect(
+                "Elige herramientas de tu biblioteca",
+                options=list(st.session_state.tools_library.keys()),
+                help="Las herramientas se definen en la pestaña 'Diseñador de Herramientas'."
+            )
 
-    col1, col2 = st.columns(2)
+        with col_main:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Capacidades")
+                enable_async = st.checkbox("Consultas Asíncronas", value=False)
+                enable_streaming = st.checkbox("Soportar Streaming", value=False)
+                enable_async_streaming = st.checkbox("Streaming Asíncrono", value=False)
+                enable_register_ops = st.checkbox("Registrar Operaciones", value=False)
+                enable_type_annotations = st.checkbox("TypedDict Annotations", value=False)
+                enable_state_mgmt = st.checkbox("Gestión de Estado", value=False)
 
-    with col1:
-        st.subheader("Herramientas (Tools)")
-        tools_input = st.text_area("Lista de funciones (separadas por coma)", "get_exchange_rate", help="Nombre de las funciones de herramientas definidas en tu código.")
+            with col2:
+                st.subheader("Integraciones")
+                enable_tracing = st.checkbox("Habilitar Cloud Trace", value=False)
+                tracing_provider = st.selectbox("Proveedor", ["OpenInference", "OpenLLMetry"], disabled=not enable_tracing)
+                enable_secrets = st.checkbox("Secret Manager", value=False)
+                enable_error_handling = st.checkbox("Error Wrapper", value=True)
+                env_vars = st.text_area("Vars de Entorno (K=V)", "")
+                credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"])
 
-        st.subheader("Capacidades")
-        enable_async = st.checkbox("Soportar consultas asíncronas (`async_query`)", value=False)
-        enable_streaming = st.checkbox("Soportar streaming (`stream_query`)", value=False)
-        enable_async_streaming = st.checkbox("Soportar streaming asíncrono (`async_stream_query`)", value=False)
-        enable_register_ops = st.checkbox("Registrar métodos personalizados (`register_operations`)", value=False)
-        enable_type_annotations = st.checkbox("Anotaciones de tipo avanzado (`TypedDict`)", value=False)
-        enable_state_mgmt = st.checkbox("Métodos de gestión de estado (`get_state`, `get_state_history`)", value=False)
+            st.divider()
+            config = {
+                'class_name': class_name, 'project_id': project_id, 'location': location,
+                'model_name': model_name, 'tools': selected_tools,
+                'enable_async': enable_async, 'enable_streaming': enable_streaming,
+                'enable_async_streaming': enable_async_streaming, 'enable_tracing': enable_tracing,
+                'tracing_provider': tracing_provider, 'enable_secrets': enable_secrets,
+                'enable_error_handling': enable_error_handling, 'credential_type': credential_type,
+                'enable_register_ops': enable_register_ops, 'enable_type_annotations': enable_type_annotations,
+                'enable_state_mgmt': enable_state_mgmt, 'env_vars': env_vars
+            }
 
-    with col2:
-        st.subheader("Integraciones y Avanzado")
-        enable_tracing = st.checkbox("Habilitar Cloud Trace", value=False)
-        tracing_provider = st.selectbox("Proveedor de Tracing", ["OpenInference", "OpenLLMetry"], disabled=not enable_tracing)
+            generated_code = generate_agent_code(config, st.session_state.tools_library)
+            st.code(generated_code, language="python")
+            st.download_button("Descargar Agente (.py)", generated_code, f"{class_name.lower()}.py")
 
-        enable_secrets = st.checkbox("Integración con Secret Manager", value=False)
-        enable_error_handling = st.checkbox("Incluir manejo de errores (`error_wrapper`)", value=True)
+    with tab_tools:
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.header("Nueva Herramienta")
+            t_name = st.text_input("Nombre de la Función", value="nueva_herramienta")
+            t_desc = st.text_area("Descripción", "Explica qué hace la herramienta.")
 
-        env_vars = st.text_area("Variables de entorno (KEY=VALUE, una por línea)", "")
+            st.subheader("Parámetros")
+            df_params = pd.DataFrame([{"Nombre": "param1", "Tipo": "str", "Descripción": "descripción"}])
+            params_data = st.data_editor(df_params, num_rows="dynamic", use_container_width=True)
 
-        credential_type = st.selectbox(
-            "Gestión de Credenciales",
-            ["None", "ADC (Application Default Credentials)", "OAuth 2.0 (User Credentials)", "Identity Provider (Federated)"]
-        )
+            st.subheader("Lógica")
+            t_body = st.text_area("Cuerpo (Python)", "return 'Resultado'", height=150)
 
-    config = {
-        'class_name': class_name,
-        'project_id': project_id,
-        'location': location,
-        'model_name': model_name,
-        'tools': tools_input,
-        'enable_async': enable_async,
-        'enable_streaming': enable_streaming,
-        'enable_async_streaming': enable_async_streaming,
-        'enable_tracing': enable_tracing,
-        'tracing_provider': tracing_provider,
-        'enable_secrets': enable_secrets,
-        'enable_error_handling': enable_error_handling,
-        'credential_type': credential_type,
-        'enable_register_ops': enable_register_ops,
-        'enable_type_annotations': enable_type_annotations,
-        'enable_state_mgmt': enable_state_mgmt,
-        'env_vars': env_vars
-    }
+            if st.button("✅ Guardar en Biblioteca"):
+                tool_code = generate_tool_code(t_name, t_desc, params_data.to_dict('records'), t_body)
+                st.session_state.tools_library[t_name] = tool_code
+                st.success(f"Herramienta '{t_name}' guardada correctamente.")
 
-    st.divider()
-    st.subheader("Código Generado")
-
-    generated_code = generate_agent_code(config)
-
-    st.code(generated_code, language="python")
-
-    st.download_button(
-        label="Descargar agente (.py)",
-        data=generated_code,
-        file_name=f"{class_name.lower()}_agent.py",
-        mime="text/x-python"
-    )
+        with col_t2:
+            st.header("Biblioteca")
+            if not st.session_state.tools_library:
+                st.info("Aún no has guardado ninguna herramienta.")
+            for name, code in st.session_state.tools_library.items():
+                with st.expander(f"📦 {name}"):
+                    st.code(code, language="python")
+                    if st.button(f"Eliminar {name}"):
+                        del st.session_state.tools_library[name]
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
