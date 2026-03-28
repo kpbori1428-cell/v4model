@@ -7,26 +7,53 @@ def generate_agent_code(config):
     model = config['model_name']
     tools = config['tools']
 
-    code = ["from typing import Callable, Sequence, Iterable"]
+    code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict"]
+
+    if config['enable_type_annotations']:
+        code.append("""
+# schemas.py
+class RunnableConfig(TypedDict, total=False):
+    metadata: Dict[str, Any]
+    configurable: Dict[str, Any]
+""")
 
     if config['enable_error_handling']:
-        code.append("from functools import wraps")
+        code.append("from functools import wraps\nimport asyncio\nimport inspect")
         code.append("""
 def error_wrapper(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as err:
-            error_code = getattr(err, 'code', 500)
-            error_message = str(err)
-            return {
-                "error": {
-                    "code": error_code,
-                    "message": f"'{func.__name__}': {error_message}"
-                }
-            }
+        if inspect.iscoroutinefunction(func):
+            async def async_wrapper():
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as err:
+                    return _format_error(func, err)
+            return async_wrapper()
+        elif inspect.isasyncgenfunction(func):
+            async def async_gen_wrapper():
+                try:
+                    async for chunk in func(*args, **kwargs):
+                        yield chunk
+                except Exception as err:
+                    yield _format_error(func, err)
+            return async_gen_wrapper()
+        else:
+            try:
+                return func(*args, **kwargs)
+            except Exception as err:
+                return _format_error(func, err)
     return wrapper
+
+def _format_error(func, err):
+    error_code = getattr(err, 'code', 500)
+    error_message = str(err)
+    return {
+        "error": {
+            "code": error_code,
+            "message": f"'{func.__name__}': {error_message}"
+        }
+    }
 """)
 
     code.append(f"""
@@ -81,37 +108,75 @@ class {class_name}:
 """)
 
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
+    config_param = "config: RunnableConfig = None, " if config['enable_type_annotations'] else ""
 
-    code.append(f"""    {query_decorator}def query(self, **kwargs):
-        return self.graph.invoke(**kwargs)""")
+    code.append(f"""    {query_decorator}def query(self, {config_param}**kwargs):
+        from langchain.load.dump import dumpd
+        return dumpd(self.graph.invoke(**kwargs))""")
 
     if config['enable_async']:
         code.append(f"""
-    {query_decorator}async def async_query(self, **kwargs):
+    {query_decorator}async def async_query(self, {config_param}**kwargs):
         from langchain.load.dump import dumpd
         result = await self.graph.ainvoke(**kwargs)
         return dumpd(result)""")
 
     if config['enable_streaming']:
         code.append(f"""
-    {query_decorator}def stream_query(self, **kwargs) -> Iterable:
+    {query_decorator}def stream_query(self, {config_param}**kwargs) -> Iterable:
         from langchain.load.dump import dumpd
         for chunk in self.graph.stream(**kwargs):
             yield dumpd(chunk)""")
 
     if config['enable_async_streaming']:
         code.append(f"""
-    {query_decorator}async def async_stream_query(self, **kwargs):
+    {query_decorator}async def async_stream_query(self, {config_param}**kwargs):
         from langchain.load.dump import dumpd
         async for chunk in self.graph.astream(**kwargs):
             yield dumpd(chunk)""")
 
-    if config['enable_credentials']:
-        code.append("""
+    if config['enable_register_ops']:
+        sync_ops = ["query"]
+        if config['enable_async']: sync_ops.append("async_query")
+
+        stream_ops = []
+        if config['enable_streaming']: stream_ops.append("stream_query")
+        if config['enable_async_streaming']: stream_ops.append("async_stream_query")
+
+        code.append(f"""
+    def register_operations(self):
+        return {{
+            "": {sync_ops},
+            "stream": {stream_ops},
+        }}""")
+
+    if config['credential_type'] != "None":
+        if config['credential_type'].startswith("ADC"):
+            code.append("""
     def get_credentials(self):
         import google.auth
+        # Note: the credential lives for 1 hour by default.
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(google.auth.transport.requests.Request())
         return creds""")
+        elif config['credential_type'].startswith("OAuth"):
+            code.append("""
+    def get_oauth_credentials(self, access_token, refresh_token=None):
+        import google.oauth2.credentials
+        return google.oauth2.credentials.Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token"
+        )""")
+        elif config['credential_type'].startswith("Identity"):
+            code.append("""
+    def setup_identity_platform(self, credentials):
+        import vertexai
+        vertexai.init(
+            project=self.project,
+            location=self.location,
+            credentials=credentials,
+        )""")
 
     return "\n".join(code)
 
@@ -139,13 +204,19 @@ def main():
         enable_async = st.checkbox("Soportar consultas asíncronas (`async_query`)", value=False)
         enable_streaming = st.checkbox("Soportar streaming (`stream_query`)", value=False)
         enable_async_streaming = st.checkbox("Soportar streaming asíncrono (`async_stream_query`)", value=False)
+        enable_register_ops = st.checkbox("Registrar métodos personalizados (`register_operations`)", value=False)
+        enable_type_annotations = st.checkbox("Anotaciones de tipo avanzado (`TypedDict`)", value=False)
 
     with col2:
         st.subheader("Integraciones y Avanzado")
         enable_tracing = st.checkbox("Habilitar Cloud Trace (OpenInference)", value=False)
         enable_secrets = st.checkbox("Integración con Secret Manager", value=False)
         enable_error_handling = st.checkbox("Incluir manejo de errores (`error_wrapper`)", value=True)
-        enable_credentials = st.checkbox("Gestión de Credenciales (ADC)", value=False)
+
+        credential_type = st.selectbox(
+            "Gestión de Credenciales",
+            ["None", "ADC (Application Default Credentials)", "OAuth 2.0 (User Credentials)", "Identity Provider (Federated)"]
+        )
 
     config = {
         'class_name': class_name,
@@ -159,7 +230,9 @@ def main():
         'enable_tracing': enable_tracing,
         'enable_secrets': enable_secrets,
         'enable_error_handling': enable_error_handling,
-        'enable_credentials': enable_credentials
+        'credential_type': credential_type,
+        'enable_register_ops': enable_register_ops,
+        'enable_type_annotations': enable_type_annotations
     }
 
     st.divider()
