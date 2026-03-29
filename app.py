@@ -78,6 +78,16 @@ def instantiate_agent_live(config, tools_library, access_token=None, system_tool
             if not self.token:
                 return self._mock_response(input_text)
 
+            # Construir contexto de herramientas para el prompt real
+            tool_ctx = ""
+            if self.tool_defs:
+                tool_ctx = "\n\n[HERRAMIENTAS DISPONIBLES]:\n"
+                for t in self.tool_defs:
+                    if isinstance(t, dict):
+                        tool_ctx += f"- {t['code'].split('(')[0].replace('def ', '')}\n"
+                    else:
+                        tool_ctx += f"- Skill: {t[:50]}...\n"
+
             # Llamada Real via REST (Simplificada para Gemini)
             headers = {
                 "Authorization": f"Bearer {self.token}",
@@ -86,7 +96,7 @@ def instantiate_agent_live(config, tools_library, access_token=None, system_tool
 
             payload = {
                 "contents": [
-                    {"role": "user", "parts": [{"text": f"{self.config['system_prompt']}\n\nUser input: {input_text}"}]}
+                    {"role": "user", "parts": [{"text": f"{self.config.get('system_prompt', 'Eres un asistente técnico.')}{tool_ctx}\n\nUser input: {input_text}"}]}
                 ],
                 "generationConfig": {
                     "temperature": self.config['temperature'],
@@ -228,10 +238,10 @@ def generate_agent_code(config, tools_library):
     model_name = config['model_name']
     selected_tool_names = config['tools']
 
-    code = ["from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict, Annotated, List, Union"]
+    code = ["import json\nimport pandas as pd\nfrom typing import Any, Dict, Callable, Sequence, Iterable, TypedDict, Annotated, List, Union"]
 
     # Inyectar definiciones de herramientas seleccionadas
-    hitl_tools = []
+    hitl_tools_list_ref = []
     if selected_tool_names:
         code.append("\n# --- HERRAMIENTAS (TOOLS) ---")
         for name in selected_tool_names:
@@ -242,7 +252,7 @@ def generate_agent_code(config, tools_library):
                     code.append(t_data)
                 else:
                     code.append(t_data['code'])
-                    if t_data.get('hitl'): hitl_tools.append(name)
+                    if t_data.get('hitl'): hitl_tools_list_ref.append(name)
     else:
         code.append("""
 # EJEMPLO DE CREACIÓN DE HERRAMIENTA (Tool):
@@ -388,7 +398,7 @@ class {class_name}:
     code.append(f"""        import vertexai
         from langchain_google_vertexai import ChatVertexAI
         from langgraph.graph import StateGraph, END
-        from langgraph.checkpoint.sqlite import SqliteSaver
+        from langgraph.checkpoint.memory import MemorySaver
         from langchain_core.messages import SystemMessage
 
         vertexai.init(project=self.project, location=self.location)
@@ -433,31 +443,56 @@ class {class_name}:
 
             workflow.add_node(node_name, make_node_func(node_prompt, node_name))
 
-        # Configuración de Flujo Dinámico (Basado en Edges)
-        for edge in self.edges_config:
-            source = edge['Origen']
-            target = edge['Destino']
-            condition = edge.get('Condición', 'Éxito')
+        workflow.set_entry_point(self.nodes_config[0]['Nodo'])
+""")
 
-            # Map END string to actual END constant
-            target_node = END if target.upper() == "END" else target
+    # Configuración de Flujo Dinámico (Generación de Código en Tiempo de Diseño)
+    code_transitions = []
+    from collections import defaultdict
+    node_transitions = defaultdict(list)
+    for edge in config['edges']:
+        node_transitions[edge['Origen']].append(edge)
 
-            if condition == 'Éxito':
-                workflow.add_edge(source, target_node)
+    for s_node, transitions in node_transitions.items():
+        if len(transitions) == 1 and transitions[0].get('Condición', 'Éxito') == 'Éxito':
+            dest = transitions[0]['Destino']
+            if dest.upper() == "END":
+                code_transitions.append(f'        workflow.add_edge("{s_node}", END)')
+            elif dest.upper() == s_node.upper():
+                code_transitions.append(f'        workflow.add_edge("{s_node}", END) # Auto-loop prevent')
             else:
-                # Lógica condicional (ej. Error -> Reintento, Veto -> Re-plan)
-                def make_condition(t, c):
-                    def _check(state):
-                        # Lógica simplificada: en un sistema real esto evaluaría el contenido del mensaje
-                        # o una variable específica en el estado (como 'status' o 'errors')
-                        last_msg = state['messages'][-1].content.lower()
-                        if c.lower() in last_msg:
-                            return t
-                        return END # Fallback
-                    return _check
+                code_transitions.append(f'        workflow.add_edge("{s_node}", "{dest}")')
+        else:
+            # Generar router dinámico para este nodo
+            router_name = f"router_{s_node.lower()}"
+            r_lines = [
+                f"        def {router_name}(state):",
+                "            last_msg = state['messages'][-1].content.lower()"
+            ]
 
-                workflow.add_conditional_edges(source, make_condition(target_node, condition))
+            # Prioridad condiciones
+            for t in transitions:
+                cond_val = t.get('Condición', 'Éxito')
+                dest_val = t['Destino']
+                if cond_val != 'Éxito':
+                    target_code = "END" if dest_val.upper() == "END" else f'"{dest_val}"'
+                    r_lines.append(f'            if "{cond_val.lower()}" in last_msg: return {target_code}')
 
+            # Fallback éxito
+            success_t = next((t for t in transitions if t.get('Condición', 'Éxito') == 'Éxito'), None)
+            if success_t:
+                dest_val = success_t['Destino']
+                target_code = "END" if dest_val.upper() == "END" else f'"{dest_val}"'
+                r_lines.append(f"            return {target_code}")
+            else:
+                r_lines.append("            return END")
+
+            code_transitions.append("\n".join(r_lines))
+            code_transitions.append(f'        workflow.add_conditional_edges("{s_node}", {router_name})')
+
+    code.append("\n".join(code_transitions))
+
+    code.append(f"""
         # Inyección de Herramientas (Si existen)
         if self.tools:
             from langgraph.prebuilt import ToolNode
@@ -472,8 +507,8 @@ class {class_name}:
         workflow.set_entry_point(self.nodes_config[0]['Nodo'])
 
         # Implementación de HITL y Persistencia
-        interrupt_tools = {hitl_tools}
-        memory = SqliteSaver.from_conn_string(":memory:") # Cambiar a ruta de archivo para persistencia real
+        interrupt_tools = {hitl_tools_list_ref}
+        memory = MemorySaver() # Usar persistencia en memoria para el template
 
         if interrupt_tools:
             self.graph = workflow.compile(checkpointer=memory, interrupt_before=["tools"])
@@ -481,6 +516,7 @@ class {class_name}:
             self.graph = workflow.compile(checkpointer=memory)
 """)
 
+    # 4. Métodos de Consulta
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
     config_param = "config: RunnableConfig = None, " if (config['enable_type_annotations'] or config['enable_state_mgmt']) else ""
 

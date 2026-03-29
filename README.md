@@ -568,7 +568,7 @@ Esta suite proporciona una interfaz visual profesional para el desarrollo aceler
 - **Generación de Código**: Descarga instantánea de plantillas de agentes listas para producción siguiendo las mejores prácticas de Google Cloud.
 
 ### 🛠️ Requisitos
-- **Python 3.10+**: `pip install streamlit pandas langchain-google-vertexai langgraph opentelemetry-api opentelemetry-sdk`
+- **Python 3.10+**: `pip install streamlit pandas langchain-google-vertexai langgraph opentelemetry-api opentelemetry-sdk requests google-auth-oauthlib google-auth-httplib2`
 - **Node.js 18+** (Solo para la versión de escritorio): `npm install`
 
 ### 🚀 Cómo empezar
