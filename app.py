@@ -436,9 +436,24 @@ class {class_name}:
 
                     response = self.llm_with_tools.invoke(messages)
 
-                    # Lógica de extracción de artefactos (Simulada para el template)
-                    # En producción, esto usaría Structured Output / Pydantic
-                    return {{"messages": [response]}}
+                    # Lógica de extracción de artefactos (Basada en etiquetas en el prompt)
+                    updates = {{"messages": [response]}}
+                    content = response.content
+                    if "context_bundle:" in content.lower():
+                        try:
+                            # Ejemplo simplificado de extracción de JSON del texto
+                            start = content.lower().find("context_bundle:") + len("context_bundle:")
+                            end = content.find("}}", start) + 1
+                            updates["context_bundle"] = json.loads(content[start:end])
+                        except: pass
+                    if "implementation_plan:" in content.lower():
+                        try:
+                            start = content.lower().find("implementation_plan:") + len("implementation_plan:")
+                            end = content.find("}}", start) + 1
+                            updates["implementation_plan"] = json.loads(content[start:end])
+                        except: pass
+
+                    return updates
                 return _node
 
             workflow.add_node(node_name, make_node_func(node_prompt, node_name))
@@ -520,7 +535,7 @@ class {class_name}:
     query_decorator = "@error_wrapper\n    " if config['enable_error_handling'] else ""
     config_param = "config: RunnableConfig = None, " if (config['enable_type_annotations'] or config['enable_state_mgmt']) else ""
 
-    code.insert(1, "from langchain.load.dump import dumpd")
+    code.insert(1, "from langchain_core.load.dump import dumpd")
 
     code.append(f"""    {query_decorator}def query(self, {config_param}**kwargs):
         return dumpd(self.graph.invoke(**kwargs))""")
@@ -610,7 +625,7 @@ agent = {class_name}(
 agent.set_up()
 
 # 2. Probar consulta síncrona
-response = agent.query(input="Hola, ¿qué puedes hacer?")
+response = agent.query(messages=[{{"role": "user", "content": "Hola, ¿qué puedes hacer?"}}])
 print(response)
 \"\"\"""")
 
@@ -637,7 +652,7 @@ def main():
             "class_name": "RobustMultiAgent",
             "project_id": "",
             "location": "us-central1",
-            "model_name": "gemini-2.5-flash",
+            "model_name": "gemini-1.5-flash",
             "tools": [],
             "nodes": [
                 {"Nodo": "Discovery", "Prompt": "Construye el mapa de verdad. Extrae definiciones y tipos vía LSP/Vectores. Responde con un Context Bundle (JSON)."},
@@ -677,7 +692,7 @@ def main():
             "class_name": "MetaArchitect",
             "project_id": "",
             "location": "us-central1",
-            "model_name": "gemini-2.5-flash",
+            "model_name": "gemini-1.5-flash",
             "tools": [],
             "nodes": [
                 {"Nodo": "SelfAnalysis", "Prompt": "Analiza las capacidades actuales del sistema. Si falta una habilidad o un agente especializado para la tarea del usuario, utiliza 'register_skill' o 'define_agent'."},
