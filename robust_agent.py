@@ -3,14 +3,14 @@ import pandas as pd
 from typing import Any, Dict, Callable, Sequence, Iterable, TypedDict, Annotated, List, Union
 from langchain_core.load.dump import dumpd
 
-# EJEMPLO DE CREACIÓN DE HERRAMIENTA (Tool):
-# def get_weather(location: str):
-#     """Obtiene el clima actual para una ubicación específica.
-#     Args:
-#         location: Ciudad y país, ej. San Francisco, CA
-#     """
-#     return f"El clima en {location} es de 22 grados Celsius y soleado."
-
+# --- HERRAMIENTAS (TOOLS) ---
+def read_local_file(path: str):
+    with open(path, "r") as f: return f.read()
+def write_local_file(path: str, content: str):
+    with open(path, "w") as f: f.write(content)
+    return f"Escrito {path}"
+import os
+def list_local_dir(p="."): return os.listdir(p)
 
 # schemas.py
 class RunnableConfig(TypedDict, total=False):
@@ -19,11 +19,8 @@ class RunnableConfig(TypedDict, total=False):
 
 class AgentState(TypedDict):
     messages: Annotated[List[Any], lambda x, y: x + y]
-    implementation_plan: Dict[str, Any]
     context_bundle: Dict[str, Any]
-    plan: Dict[str, Any]
-    hunks: List[Any]
-    diagnostics: str
+    implementation_plan: Dict[str, Any]
 from functools import wraps
 import asyncio
 import inspect
@@ -68,16 +65,16 @@ class RobustMultiAgent:
     def __init__(
         self,
         model: str = "gemini-1.5-flash",
-        tools: Sequence[Callable] = [],
-        project: str = "your-project-id",
+        tools: Sequence[Callable] = [read_local_file, write_local_file, list_local_dir],
+        project: str = "local-project",
         location: str = "us-central1",
     ):
         self.model_name = model
         self.tools = tools
         self.project = project
         self.location = location
-        self.nodes_config = [{'Nodo': 'Discovery', 'Prompt': 'Analiza el código y genera un context_bundle: {"files": []}'}, {'Nodo': 'Planning', 'Prompt': 'Genera un implementation_plan: {"steps": []}'}, {'Nodo': 'Execution', 'Prompt': 'Aplica los cambios.'}, {'Nodo': 'Diagnostics', 'Prompt': 'Verifica errores. Devuelve "Zero Errors" si todo está bien.'}, {'Nodo': 'Testing', 'Prompt': 'Ejecuta tests.'}, {'Nodo': 'Critique', 'Prompt': 'Auditoría final.'}]
-        self.edges_config = [{'Origen': 'Discovery', 'Destino': 'Planning', 'Condición': 'Éxito'}, {'Origen': 'Planning', 'Destino': 'Execution', 'Condición': 'Éxito'}, {'Origen': 'Execution', 'Destino': 'Diagnostics', 'Condición': 'Éxito'}, {'Origen': 'Diagnostics', 'Destino': 'Execution', 'Condición': 'Error'}, {'Origen': 'Diagnostics', 'Destino': 'Testing', 'Condición': 'Zero Errors'}, {'Origen': 'Testing', 'Destino': 'Planning', 'Condición': 'Fallo'}, {'Origen': 'Testing', 'Destino': 'Critique', 'Condición': 'Éxito'}, {'Origen': 'Critique', 'Destino': 'Planning', 'Condición': 'Veto'}, {'Origen': 'Critique', 'Destino': 'END', 'Condición': 'Aprobado'}]
+        self.nodes_config = [{'Nodo': 'Discovery', 'Prompt': 'Analiza el directorio actual.'}, {'Nodo': 'Planning', 'Prompt': 'Crea un plan de archivos.'}, {'Nodo': 'Execution', 'Prompt': 'Escribe los archivos reales en disco.'}, {'Nodo': 'Diagnostics', 'Prompt': 'Valida la existencia de los archivos.'}, {'Nodo': 'Testing', 'Prompt': 'Simula ejecución.'}, {'Nodo': 'Critique', 'Prompt': 'Aprobación final.'}]
+        self.edges_config = [{'Origen': 'Discovery', 'Destino': 'Planning', 'Condición': 'Éxito'}, {'Origen': 'Planning', 'Destino': 'Execution', 'Condición': 'Éxito'}, {'Origen': 'Execution', 'Destino': 'Diagnostics', 'Condición': 'Éxito'}, {'Origen': 'Diagnostics', 'Destino': 'Testing', 'Condición': 'Zero Errors'}, {'Origen': 'Testing', 'Destino': 'Critique', 'Condición': 'Éxito'}, {'Origen': 'Critique', 'Destino': 'END', 'Condición': 'Aprobado'}]
 
     def set_up(self):
         import vertexai
@@ -150,18 +147,12 @@ class RobustMultiAgent:
         workflow.add_edge("Execution", "Diagnostics")
         def router_diagnostics(state):
             last_msg = state['messages'][-1].content.lower()
-            if "error" in last_msg: return "Execution"
             if "zero errors" in last_msg: return "Testing"
             return END
         workflow.add_conditional_edges("Diagnostics", router_diagnostics)
-        def router_testing(state):
-            last_msg = state['messages'][-1].content.lower()
-            if "fallo" in last_msg: return "Planning"
-            return "Critique"
-        workflow.add_conditional_edges("Testing", router_testing)
+        workflow.add_edge("Testing", "Critique")
         def router_critique(state):
             last_msg = state['messages'][-1].content.lower()
-            if "veto" in last_msg: return "Planning"
             if "aprobado" in last_msg: return END
             return END
         workflow.add_conditional_edges("Critique", router_critique)
@@ -180,7 +171,7 @@ class RobustMultiAgent:
         workflow.set_entry_point(self.nodes_config[0]['Nodo'])
 
         # Implementación de HITL y Persistencia
-        interrupt_tools = []
+        interrupt_tools = ['write_local_file']
         memory = MemorySaver() # Usar persistencia en memoria para el template
 
         if interrupt_tools:
@@ -206,12 +197,22 @@ class RobustMultiAgent:
         for state_snapshot in self.graph.get_state_history(config=config):
             yield state_snapshot._asdict()
 
+    def register_operations(self):
+        return {
+            "": ['query', 'async_query', 'get_state'],
+            "stream": ['get_state_history'],
+        }
+
+    def set_api_key(self, api_key: str):
+        import os
+        os.environ["GOOGLE_API_KEY"] = api_key
+
 """
 EJEMPLOS DE USO LOCAL (Basados en README.md):
 
 # 1. Instanciar el agente
 agent = RobustMultiAgent(
-    project="your-project-id",
+    project="local-project",
     location="us-central1"
 )
 agent.set_up()

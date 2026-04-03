@@ -15,6 +15,12 @@ Aquí puedes ver cómo colaboran múltiples agentes en una misión de ingenierí
 # --- SIDEBAR: CONFIGURACIÓN Y ESTADO ---
 with st.sidebar:
     st.header("⚙️ Configuración")
+    auth_mode = st.radio("Modo de Auth", ["Local (Solo Herramientas)", "Vertex AI (API Key)", "Vertex AI (OAuth)"], index=0)
+
+    api_key = None
+    if auth_mode == "Vertex AI (API Key)":
+        api_key = st.text_input("Google API Key", type="password")
+
     project_id = st.text_input("GCP Project ID", placeholder="your-project-id")
     location = st.text_input("Location", value="us-central1")
 
@@ -41,48 +47,41 @@ if prompt := st.chat_input("Describe la tarea de ingeniería o el bug a resolver
         st.markdown(prompt)
 
     # 1. Instanciar el Agente Real
-    with st.spinner("🤖 Inicializando Orquestador de Agentes..."):
+    with st.spinner("🤖 Inicializando Motor de Multi-Agentes..."):
         agent = RobustMultiAgent(project=project_id, location=location)
-        # Nota: En una demo real, necesitaríamos set_up() con credenciales.
-        # Para esta demo visual, simularemos la traza de ejecución si no hay credenciales.
+        if auth_mode == "Vertex AI (API Key)" and api_key:
+            agent.set_api_key(api_key)
+        agent.set_up()
 
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
-        status_container = st.status("🚀 Iniciando Misión Multi-Agente...", expanded=True)
+        status_container = st.status("🚀 Ejecutando Flujo de Trabajo Local...", expanded=True)
 
-        # Simulación de la cadena de agentes (Visualización de la Colaboración)
-        trace = [
-            ("Discovery", "🔍 Escaneando el mapa de verdad y dependencias..."),
-            ("Planning", "📝 Generando Implementation Plan atómico..."),
-            ("Execution", "💻 Aplicando cambios sugeridos en el código..."),
-            ("Diagnostics", "🛡️ Ejecutando Linter y verificador de tipos..."),
-            ("Diagnostics", "⚠️ Error detectado. Re-enviando a Execution para corrección..."),
-            ("Execution", "💻 Corrigiendo error de tipos en el Hunk..."),
-            ("Diagnostics", "✅ Zero Errors. Procediendo a Testing..."),
-            ("Testing", "🧪 Ejecutando suite de pruebas unitarias..."),
-            ("Critique", "⚖️ Auditoría final de calidad completada. Veredicto: APROBADO.")
-        ]
+        # Ejecución real mediante streaming
+        try:
+            # En modo local sin LLM, esto fallará si no hay lógica de fallback,
+            # para la demo real local, el grafo procesa las herramientas.
+            input_state = {"messages": [{"role": "user", "content": prompt}]}
 
-        full_response = ""
-        for agent_name, description in trace:
-            status_container.write(f"**[{agent_name}]**: {description}")
+            for chunk in agent.graph.stream(input_state):
+                for node_name, output in chunk.items():
+                    status_container.write(f"**[Agente: {node_name}]** trabajando...")
 
-            # Actualizar artefactos en el sidebar (Simulado para la demo)
-            if agent_name == "Discovery":
-                context_placeholder.json({"files": ["main.py", "utils.py"], "types": {"User": "class"}})
-            if agent_name == "Planning":
-                plan_placeholder.json({"steps": ["Refactor init", "Update schema"]})
+                    # Actualizar UI con datos reales del estado
+                    current_state = agent.graph.get_state()
+                    if 'context_bundle' in current_state.values:
+                        context_placeholder.json(current_state.values['context_bundle'])
+                    if 'implementation_plan' in current_state.values:
+                        plan_placeholder.json(current_state.values['implementation_plan'])
 
-            time_delay = 0.8
-            import time
-            time.sleep(time_delay)
+            status_container.update(label="✅ Misión Local Completada", state="complete", expanded=False)
+            final_text = "**[Misión Finalizada]**\n\nLos agentes han completado la tarea en el entorno local. Se han aplicado cambios reales en el sistema de archivos si fue solicitado."
+            response_placeholder.markdown(final_text)
+            st.session_state.messages.append({"role": "assistant", "content": final_text})
 
-        status_container.update(label="✅ Misión Completada con Éxito", state="complete", expanded=False)
-
-        final_text = f"**[Resultado Final de la Misión]**\n\nLa tarea ha sido procesada exitosamente a través de la cadena de 6 agentes. Se han corregido inconsistencias de tipos durante la fase de **Diagnostics** y se ha obtenido la aprobación final de **Critique**.\n\nTodos los artefactos (Contexto y Plan) están disponibles en el panel lateral."
-        response_placeholder.markdown(final_text)
-
-        st.session_state.messages.append({"role": "assistant", "content": final_text})
+        except Exception as e:
+            status_container.error(f"Error en ejecución: {str(e)}")
+            st.error("Asegúrate de configurar las credenciales correctas en el panel lateral.")
 
 # --- PIE DE PÁGINA ---
 st.divider()

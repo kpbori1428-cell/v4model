@@ -585,7 +585,12 @@ class {class_name}:
         }}""")
 
     if config['credential_type'] != "None":
-        if config['credential_type'].startswith("ADC"):
+        if config['credential_type'] == "API Key":
+            code.append("""
+    def set_api_key(self, api_key: str):
+        import os
+        os.environ["GOOGLE_API_KEY"] = api_key""")
+        elif config['credential_type'].startswith("ADC"):
             code.append("""
     def get_credentials(self):
         import google.auth
@@ -645,6 +650,23 @@ def main():
 
     agents_library = load_agents()
 
+    # --- INYECTAR HERRAMIENTAS LOCALES REALES ---
+    if "read_local_file" not in st.session_state.tools_library:
+        st.session_state.tools_library["read_local_file"] = {
+            "code": "def read_local_file(path: str):\n    \"\"\"Lee el contenido de un archivo local real.\n    Args:\n        path: Ruta al archivo.\n    \"\"\"\n    with open(path, 'r') as f:\n        return f.read()",
+            "hitl": False
+        }
+    if "write_local_file" not in st.session_state.tools_library:
+        st.session_state.tools_library["write_local_file"] = {
+            "code": "def write_local_file(path: str, content: str):\n    \"\"\"Escribe contenido en un archivo local real.\n    Args:\n        path: Ruta al archivo.\n        content: Contenido a escribir.\n    \"\"\"\n    with open(path, 'w') as f:\n        f.write(content)\n    return f'Archivo {path} escrito con éxito.'",
+            "hitl": True
+        }
+    if "list_local_dir" not in st.session_state.tools_library:
+        st.session_state.tools_library["list_local_dir"] = {
+            "code": "import os\ndef list_local_dir(path: str = '.'):\n    \"\"\"Lista los archivos en un directorio local.\n    Args:\n        path: Directorio a listar.\n    \"\"\"\n    return os.listdir(path)",
+            "hitl": False
+        }
+
     # --- INYECTAR PRESET DE MISIÓN (SI NO EXISTE) ---
     MISSION_PRESET_NAME = "Misión: Multi-Agente Robusto"
     if MISSION_PRESET_NAME not in agents_library:
@@ -653,7 +675,7 @@ def main():
             "project_id": "",
             "location": "us-central1",
             "model_name": "gemini-1.5-flash",
-            "tools": [],
+            "tools": ["read_local_file", "write_local_file", "list_local_dir"],
             "nodes": [
                 {"Nodo": "Discovery", "Prompt": "Construye el mapa de verdad. Extrae definiciones y tipos vía LSP/Vectores. Responde con un Context Bundle (JSON)."},
                 {"Nodo": "Planning", "Prompt": "Genera un Implementation Plan (JSON) atómico. No generes código, solo lógica secuencial."},
@@ -808,8 +830,8 @@ def main():
                     enable_secrets = st.checkbox("Secret Manager", value=get_v('enable_secrets', False))
                     enable_error_handling = st.checkbox("Error Wrapper", value=get_v('enable_error_handling', True))
                     env_vars = st.text_area("Vars de Entorno (K=V)", value=get_v('env_vars', ""))
-                    cred_idx = ["None", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
-                    credential_type = st.selectbox("Credenciales", ["None", "ADC", "OAuth", "Identity"], index=cred_idx)
+                    cred_idx = ["None", "API Key", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
+                    credential_type = st.selectbox("Credenciales", ["None", "API Key", "ADC", "OAuth", "Identity"], index=cred_idx)
 
             st.divider()
             config = {
