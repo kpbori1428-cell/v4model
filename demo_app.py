@@ -70,13 +70,21 @@ if prompt := st.chat_input("Describe la tarea de ingeniería o el bug a resolver
 
         # Ejecución real mediante streaming
         try:
-            # En modo local sin LLM, esto fallará si no hay lógica de fallback,
-            # para la demo real local, el grafo procesa las herramientas.
             input_state = {"messages": [{"role": "user", "content": prompt}]}
+            final_response = ""
+            mission_started = False
 
             for chunk in agent.graph.stream(input_state):
                 for node_name, output in chunk.items():
-                    status_container.write(f"**[Agente: {node_name}]** trabajando...")
+                    if node_name == "Architect":
+                        final_response = output["messages"][-1].content
+                        if "[START_MISSION]" in final_response.upper():
+                            mission_started = True
+                            status_container.write("🚀 **El Arquitecto ha iniciado la misión técnica.**")
+                        else:
+                            status_container.update(label="💬 Consulta Finalizada", state="complete", expanded=False)
+                    else:
+                        status_container.write(f"**[Agente: {node_name}]** trabajando...")
 
                     # Actualizar UI con datos reales del estado
                     current_state = agent.graph.get_state()
@@ -85,8 +93,12 @@ if prompt := st.chat_input("Describe la tarea de ingeniería o el bug a resolver
                     if 'implementation_plan' in current_state.values:
                         plan_placeholder.json(current_state.values['implementation_plan'])
 
-            status_container.update(label="✅ Misión Local Completada", state="complete", expanded=False)
-            final_text = "**[Misión Finalizada]**\n\nLos agentes han completado la tarea en el entorno local. Se han aplicado cambios reales en el sistema de archivos si fue solicitado."
+            if mission_started:
+                status_container.update(label="✅ Misión Local Completada", state="complete", expanded=False)
+                final_text = f"{final_response}\n\n**[Misión Finalizada]**\n\nLos agentes han completado la tarea técnica. Se han aplicado cambios reales en el sistema de archivos si fue solicitado."
+            else:
+                final_text = final_response
+
             response_placeholder.markdown(final_text)
             st.session_state.messages.append({"role": "assistant", "content": final_text})
 

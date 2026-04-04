@@ -73,8 +73,15 @@ class RobustMultiAgent:
         self.tools = tools
         self.project = project
         self.location = location
-        self.nodes_config = [{'Nodo': 'Discovery', 'Prompt': 'Analiza el código y genera un context_bundle: {"files": []}'}, {'Nodo': 'Planning', 'Prompt': 'Genera un implementation_plan: {"steps": []}'}, {'Nodo': 'Execution', 'Prompt': 'Aplica los cambios.'}, {'Nodo': 'Diagnostics', 'Prompt': 'Verifica errores.'}, {'Nodo': 'Testing', 'Prompt': 'Ejecuta tests.'}, {'Nodo': 'Critique', 'Prompt': 'Auditoría final.'}]
-        self.edges_config = [{'Origen': 'Discovery', 'Destino': 'Planning', 'Condición': 'Éxito'}, {'Origen': 'Planning', 'Destino': 'Execution', 'Condición': 'Éxito'}, {'Origen': 'Execution', 'Destino': 'Diagnostics', 'Condición': 'Éxito'}, {'Origen': 'Diagnostics', 'Destino': 'Execution', 'Condición': 'Error'}, {'Origen': 'Diagnostics', 'Destino': 'Testing', 'Condición': 'Zero Errors'}, {'Origen': 'Testing', 'Destino': 'Planning', 'Condición': 'Fallo'}, {'Origen': 'Testing', 'Destino': 'Critique', 'Condición': 'Éxito'}, {'Origen': 'Critique', 'Destino': 'Planning', 'Condición': 'Veto'}, {'Origen': 'Critique', 'Destino': 'END', 'Condición': 'Aprobado'}]
+        self.nodes_config = [
+            {'Nodo': 'Architect', 'Prompt': 'Eres el Arquitecto Principal. Tu objetivo es hablar con el usuario antes de empezar cualquier tarea técnica. Si el usuario solo quiere hablar o preguntar cosas generales, responde de forma conversacional. Si el usuario pide explícitamente crear, modificar o analizar una aplicación/código de forma técnica, responde con la palabra clave [START_MISSION] seguida de una breve confirmación.'},
+            {'Nodo': 'Discovery', 'Prompt': 'Construye el mapa de verdad. Extrae definiciones y tipos vía LSP/Vectores. Genera un context_bundle: {"files": []}'},
+            {'Nodo': 'Planning', 'Prompt': 'Genera un implementation_plan: {"steps": []} atómico. No generes código, solo lógica secuencial.'},
+            {'Nodo': 'Execution', 'Prompt': 'Manipula archivos reales. Genera código y usa las herramientas de escritura.'},
+            {'Nodo': 'Diagnostics', 'Prompt': 'Linter virtual. Busca errores. Responde con "Zero Errors" si todo está bien o explica el "Error".'},
+            {'Nodo': 'Testing', 'Prompt': 'Simula ejecución de tests. Responde con "Éxito" o "Fallo".'},
+            {'Nodo': 'Critique', 'Prompt': 'Auditoría de calidad. Responde con "Aprobado" o "Veto".'}
+        ]
 
     def set_up(self):
         import vertexai
@@ -143,7 +150,14 @@ class RobustMultiAgent:
 
             workflow.add_node(node_name, make_node_func(node_prompt, node_name))
 
-        workflow.set_entry_point(self.nodes_config[0]['Nodo'])
+        workflow.set_entry_point("Architect")
+
+        def router_architect(state):
+            last_msg = state['messages'][-1].content.upper()
+            if "[START_MISSION]" in last_msg:
+                return "Discovery"
+            return END
+        workflow.add_conditional_edges("Architect", router_architect)
 
         workflow.add_edge("Discovery", "Planning")
         workflow.add_edge("Planning", "Execution")
