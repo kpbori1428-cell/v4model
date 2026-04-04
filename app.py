@@ -401,7 +401,10 @@ class {class_name}:
         from langgraph.checkpoint.memory import MemorySaver
         from langchain_core.messages import SystemMessage
 
-        vertexai.init(project=self.project, location=self.location)
+        if hasattr(self, 'credentials'):
+            vertexai.init(project=self.project, location=self.location, credentials=self.credentials)
+        else:
+            vertexai.init(project=self.project, location=self.location)
 
         # Modelo con parámetros avanzados
         self.llm = ChatVertexAI(
@@ -585,7 +588,12 @@ class {class_name}:
         }}""")
 
     if config['credential_type'] != "None":
-        if config['credential_type'] == "API Key":
+        if config['credential_type'] == "Service Account JSON":
+            code.append("""
+    def set_credentials_json(self, json_path: str):
+        from google.oauth2 import service_account
+        self.credentials = service_account.Credentials.from_service_account_file(json_path)""")
+        elif config['credential_type'] == "API Key":
             code.append("""
     def set_api_key(self, api_key: str):
         import os
@@ -830,8 +838,8 @@ def main():
                     enable_secrets = st.checkbox("Secret Manager", value=get_v('enable_secrets', False))
                     enable_error_handling = st.checkbox("Error Wrapper", value=get_v('enable_error_handling', True))
                     env_vars = st.text_area("Vars de Entorno (K=V)", value=get_v('env_vars', ""))
-                    cred_idx = ["None", "API Key", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
-                    credential_type = st.selectbox("Credenciales", ["None", "API Key", "ADC", "OAuth", "Identity"], index=cred_idx)
+                    cred_idx = ["None", "Service Account JSON", "ADC", "OAuth", "Identity"].index(get_v('credential_type', "None"))
+                    credential_type = st.selectbox("Credenciales", ["None", "Service Account JSON", "ADC", "OAuth", "Identity"], index=cred_idx)
 
             st.divider()
             config = {

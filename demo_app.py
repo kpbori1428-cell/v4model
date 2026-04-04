@@ -15,11 +15,20 @@ Aquí puedes ver cómo colaboran múltiples agentes en una misión de ingenierí
 # --- SIDEBAR: CONFIGURACIÓN Y ESTADO ---
 with st.sidebar:
     st.header("⚙️ Configuración")
-    auth_mode = st.radio("Modo de Auth", ["Local (Solo Herramientas)", "Vertex AI (API Key)", "Vertex AI (OAuth)"], index=0)
+    auth_mode = st.radio("Modo de Auth", ["Local (Solo Herramientas)", "Vertex AI (Service Account JSON)", "Vertex AI (API Key)", "Vertex AI (OAuth)"], index=0)
 
     api_key = None
+    service_account_path = None
     if auth_mode == "Vertex AI (API Key)":
         api_key = st.text_input("Google API Key", type="password")
+    elif auth_mode == "Vertex AI (Service Account JSON)":
+        uploaded_json = st.file_uploader("Subir llave JSON", type=["json"])
+        if uploaded_json:
+            import tempfile
+            # Guardar temporalmente para que el agente pueda leerlo
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
+                tmp.write(uploaded_json.getvalue())
+                service_account_path = tmp.name
 
     project_id = st.text_input("GCP Project ID", placeholder="your-project-id")
     location = st.text_input("Location", value="us-central1")
@@ -51,6 +60,8 @@ if prompt := st.chat_input("Describe la tarea de ingeniería o el bug a resolver
         agent = RobustMultiAgent(project=project_id, location=location)
         if auth_mode == "Vertex AI (API Key)" and api_key:
             agent.set_api_key(api_key)
+        elif auth_mode == "Vertex AI (Service Account JSON)" and service_account_path:
+            agent.set_credentials_json(service_account_path)
         agent.set_up()
 
     with st.chat_message("assistant"):

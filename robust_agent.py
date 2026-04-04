@@ -66,15 +66,15 @@ class RobustMultiAgent:
         self,
         model: str = "gemini-1.5-flash",
         tools: Sequence[Callable] = [read_local_file, write_local_file, list_local_dir],
-        project: str = "local-project",
+        project: str = "your-project-id",
         location: str = "us-central1",
     ):
         self.model_name = model
         self.tools = tools
         self.project = project
         self.location = location
-        self.nodes_config = [{'Nodo': 'Discovery', 'Prompt': 'Analiza el directorio actual.'}, {'Nodo': 'Planning', 'Prompt': 'Crea un plan de archivos.'}, {'Nodo': 'Execution', 'Prompt': 'Escribe los archivos reales en disco.'}, {'Nodo': 'Diagnostics', 'Prompt': 'Valida la existencia de los archivos.'}, {'Nodo': 'Testing', 'Prompt': 'Simula ejecución.'}, {'Nodo': 'Critique', 'Prompt': 'Aprobación final.'}]
-        self.edges_config = [{'Origen': 'Discovery', 'Destino': 'Planning', 'Condición': 'Éxito'}, {'Origen': 'Planning', 'Destino': 'Execution', 'Condición': 'Éxito'}, {'Origen': 'Execution', 'Destino': 'Diagnostics', 'Condición': 'Éxito'}, {'Origen': 'Diagnostics', 'Destino': 'Testing', 'Condición': 'Zero Errors'}, {'Origen': 'Testing', 'Destino': 'Critique', 'Condición': 'Éxito'}, {'Origen': 'Critique', 'Destino': 'END', 'Condición': 'Aprobado'}]
+        self.nodes_config = [{'Nodo': 'Discovery', 'Prompt': 'Analiza el código y genera un context_bundle: {"files": []}'}, {'Nodo': 'Planning', 'Prompt': 'Genera un implementation_plan: {"steps": []}'}, {'Nodo': 'Execution', 'Prompt': 'Aplica los cambios.'}, {'Nodo': 'Diagnostics', 'Prompt': 'Verifica errores.'}, {'Nodo': 'Testing', 'Prompt': 'Ejecuta tests.'}, {'Nodo': 'Critique', 'Prompt': 'Auditoría final.'}]
+        self.edges_config = [{'Origen': 'Discovery', 'Destino': 'Planning', 'Condición': 'Éxito'}, {'Origen': 'Planning', 'Destino': 'Execution', 'Condición': 'Éxito'}, {'Origen': 'Execution', 'Destino': 'Diagnostics', 'Condición': 'Éxito'}, {'Origen': 'Diagnostics', 'Destino': 'Execution', 'Condición': 'Error'}, {'Origen': 'Diagnostics', 'Destino': 'Testing', 'Condición': 'Zero Errors'}, {'Origen': 'Testing', 'Destino': 'Planning', 'Condición': 'Fallo'}, {'Origen': 'Testing', 'Destino': 'Critique', 'Condición': 'Éxito'}, {'Origen': 'Critique', 'Destino': 'Planning', 'Condición': 'Veto'}, {'Origen': 'Critique', 'Destino': 'END', 'Condición': 'Aprobado'}]
 
     def set_up(self):
         import vertexai
@@ -83,7 +83,10 @@ class RobustMultiAgent:
         from langgraph.checkpoint.memory import MemorySaver
         from langchain_core.messages import SystemMessage
 
-        vertexai.init(project=self.project, location=self.location)
+        if hasattr(self, 'credentials'):
+            vertexai.init(project=self.project, location=self.location, credentials=self.credentials)
+        else:
+            vertexai.init(project=self.project, location=self.location)
 
         # Modelo con parámetros avanzados
         self.llm = ChatVertexAI(
@@ -147,12 +150,18 @@ class RobustMultiAgent:
         workflow.add_edge("Execution", "Diagnostics")
         def router_diagnostics(state):
             last_msg = state['messages'][-1].content.lower()
+            if "error" in last_msg: return "Execution"
             if "zero errors" in last_msg: return "Testing"
             return END
         workflow.add_conditional_edges("Diagnostics", router_diagnostics)
-        workflow.add_edge("Testing", "Critique")
+        def router_testing(state):
+            last_msg = state['messages'][-1].content.lower()
+            if "fallo" in last_msg: return "Planning"
+            return "Critique"
+        workflow.add_conditional_edges("Testing", router_testing)
         def router_critique(state):
             last_msg = state['messages'][-1].content.lower()
+            if "veto" in last_msg: return "Planning"
             if "aprobado" in last_msg: return END
             return END
         workflow.add_conditional_edges("Critique", router_critique)
@@ -203,16 +212,16 @@ class RobustMultiAgent:
             "stream": ['get_state_history'],
         }
 
-    def set_api_key(self, api_key: str):
-        import os
-        os.environ["GOOGLE_API_KEY"] = api_key
+    def set_credentials_json(self, json_path: str):
+        from google.oauth2 import service_account
+        self.credentials = service_account.Credentials.from_service_account_file(json_path)
 
 """
 EJEMPLOS DE USO LOCAL (Basados en README.md):
 
 # 1. Instanciar el agente
 agent = RobustMultiAgent(
-    project="local-project",
+    project="your-project-id",
     location="us-central1"
 )
 agent.set_up()
